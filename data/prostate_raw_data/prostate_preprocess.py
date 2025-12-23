@@ -1,8 +1,8 @@
 """
-Script de prétraitement pour données de prostate au format nii.gz.
+Script de prétraitement pour données de prostate + bandelettes au format nii.gz.
 
 Ce script:
-1. Charge les fichiers nii.gz T2, ADC et segmentation
+1. Charge les fichiers nii.gz T2, ADC et segmentation multi-label
 2. Resample à une taille uniforme (96x96x96)
 3. Normalise les intensités
 4. Convertit en format PyTorch .pt pour entraînement rapide
@@ -12,18 +12,28 @@ Structure d'entrée attendue:
     ├── patient_001/
     │   ├── T2.nii.gz
     │   ├── ADC.nii.gz
-    │   └── segmentation.nii.gz
+    │   ├── prostate.nii.gz        (label 1)
+    │   └── bandelettes.nii.gz     (label 2)
     ├── patient_002/
     │   ├── T2.nii.gz
     │   ├── ADC.nii.gz
-    │   └── segmentation.nii.gz
+    │   ├── prostate.nii.gz
+    │   └── bandelettes.nii.gz
+    └── ...
+
+OU segmentation multi-label unique:
+    prostate_raw_data/
+    ├── patient_001/
+    │   ├── T2.nii.gz
+    │   ├── ADC.nii.gz
+    │   └── segmentation.nii.gz   (0=fond, 1=prostate, 2=bandelettes)
     └── ...
 
 Structure de sortie:
     prostate_preprocessed/
     ├── patient_001/
     │   ├── patient_001_modalities.pt  (2, 96, 96, 96) [T2, ADC]
-    │   └── patient_001_label.pt       (1, 96, 96, 96)
+    │   └── patient_001_label.pt       (1, 96, 96, 96) [0/1/2]
     ├── patient_002/
     │   ├── patient_002_modalities.pt
     │   └── patient_002_label.pt
@@ -79,6 +89,55 @@ class ProstatePreprocessor:
             return data
         except Exception as e:
             raise ValueError(f"Erreur lors du chargement {filepath}: {str(e)}")
+    
+    def _load_segmentation(self, case_dir: str, case_name: str) -> np.ndarray:
+        """
+        Charge la segmentation multi-label.
+        
+        Supporte deux formats:
+        1. Fichier unique: segmentation.nii.gz (0=fond, 1=prostate, 2=bandelettes)
+        2. Fichiers séparés: prostate.nii.gz (label 1), bandelettes.nii.gz (label 2)
+        
+        Args:
+            case_dir: Répertoire du patient
+            case_name: Nom du patient
+        
+        Returns:
+            Segmentation multi-label (D, H, W) avec valeurs 0, 1, 2
+        """
+        # Essaie d'abord le fichier unique multi-label
+        seg_path = os.path.join(case_dir, "segmentation.nii.gz")
+        if os.path.exists(seg_path):
+            seg = self.load_nifti(seg_path)
+            # Assure que c'est bien multi-label (0, 1, 2)
+            return seg
+        
+        # Sinon, combine les fichiers séparés
+        prostate_path = os.path.join(case_dir, "prostate.nii.gz")
+        bandelettes_path = os.path.join(case_dir, "bandelettes.nii.gz")
+        
+        if not os.path.exists(prostate_path):
+            raise FileNotFoundError(
+                f"Segmentation manquante pour {case_name}\n"
+                f"Attendu: segmentation.nii.gz OU prostate.nii.gz + bandelettes.nii.gz"
+            )
+        
+        # Charge prostate
+        prostate = self.load_nifti(prostate_path)
+        prostate_mask = (prostate > 0.5).astype(np.uint8)
+        
+        # Charge bandelettes si disponible
+        bandelettes_mask = np.zeros_like(prostate_mask)
+        if os.path.exists(bandelettes_path):
+            bandelettes = self.load_nifti(bandelettes_path)
+            bandelettes_mask = (bandelettes > 0.5).astype(np.uint8)
+        
+        # Combine: 0=fond, 1=prostate, 2=bandelettes
+        seg_combined = np.zeros_like(prostate_mask)
+        seg_combined[prostate_mask > 0] = 1
+        seg_combined[bandelettes_mask > 0] = 2
+        
+        return seg_combined.astype(np.float32)
     
     def resample_volume(
         self,
@@ -200,23 +259,22 @@ class ProstatePreprocessor:
         }
         
         try:
-            # Chemins des fichiers
+            # Chemins des fichiers - support multi-label
             t2_path = os.path.join(case_dir, "T2.nii.gz")
             adc_path = os.path.join(case_dir, "ADC.nii.gz")
-            seg_path = os.path.join(case_dir, "segmentation.nii.gz")
             
-            # Vérifie l'existence des fichiers
+            # Vérifie l'existence des fichiers T2, ADC
             if not os.path.exists(t2_path):
                 raise FileNotFoundError(f"T2.nii.gz manquant dans {case_dir}")
             if not os.path.exists(adc_path):
                 raise FileNotFoundError(f"ADC.nii.gz manquant dans {case_dir}")
-            if not os.path.exists(seg_path):
-                raise FileNotFoundError(f"segmentation.nii.gz manquant dans {case_dir}")
             
-            # Charge les données
+            # Charge les données T2, ADC
             t2 = self.load_nifti(t2_path)
             adc = self.load_nifti(adc_path)
-            seg = self.load_nifti(seg_path)
+            
+            # Charge la segmentation (multi-label ou fichiers séparés)
+            seg = self._load_segmentation(case_dir, case_name)
             
             # Resample à la taille cible
             target = (self.target_size, self.target_size, self.target_size)
@@ -224,11 +282,12 @@ class ProstatePreprocessor:
             adc_resampled = self.resample_volume(adc, target, order=1)
             seg_resampled = self.resample_volume(seg, target, order=0)
             
-            # Binarise la segmentation
-            seg_binary = (seg_resampled > 0.5).astype(np.float32)
+            # Préserve les labels multi-classe (0, 1, 2)
+            seg_labels = np.round(seg_resampled).astype(np.uint8)
+            seg_labels = np.clip(seg_labels, 0, 2)  # Assure labels 0, 1, 2
             
-            # Crée un mask pour la normalisation
-            mask = seg_binary + (seg_resampled > 0)  # Inclut la région de prostate
+            # Crée un mask pour la normalisation (tout sauf fond = prostate + bandelettes)
+            mask = (seg_labels > 0).astype(np.float32)
             
             # Normalise les intensités
             t2_norm = self.normalize_intensity(t2_resampled, mask, method=self.normalize_method)
@@ -236,7 +295,7 @@ class ProstatePreprocessor:
             
             # Empile les modalités: (2, D, H, W)
             modalities = np.stack([t2_norm, adc_norm], axis=0)
-            label = seg_binary[np.newaxis, :, :, :]  # (1, D, H, W)
+            label = seg_labels[np.newaxis, :, :, :]  # (1, D, H, W) avec labels 0, 1, 2
             
             # Convertit en tenseurs PyTorch
             modalities_tensor = torch.from_numpy(modalities).float()
@@ -256,13 +315,19 @@ class ProstatePreprocessor:
             # Collecte les stats
             result["success"] = True
             result["message"] = f"✅ Prétraité avec succès"
+            
+            # Stats par classe
+            prostate_count = int((seg_labels == 1).sum())
+            bandelettes_count = int((seg_labels == 2).sum())
+            
             result["stats"] = {
                 "input_shape": t2.shape,
                 "output_shape": tuple(modalities_tensor.shape),
                 "t2_range": (float(t2_norm.min()), float(t2_norm.max())),
                 "adc_range": (float(adc_norm.min()), float(adc_norm.max())),
-                "prostate_voxels": int(seg_binary.sum()),
-                "total_voxels": int(np.prod(seg_binary.shape)),
+                "prostate_voxels": prostate_count,
+                "bandelettes_voxels": bandelettes_count,
+                "total_voxels": int(np.prod(seg_labels.shape)),
             }
         
         except Exception as e:

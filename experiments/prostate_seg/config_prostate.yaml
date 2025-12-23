@@ -20,10 +20,10 @@ data:
 
 # ============ MODEL ============
 model:
-  # Paramètres essentiels pour prostate
+  # Paramètres essentiels pour prostate + bandelettes
   name: "segformer3d"
   in_channels: 2       # T2, ADC (au lieu de 4 pour BraTS)
-  num_classes: 2       # background + prostate (au lieu de 3 pour BraTS)
+  num_classes: 3       # background + prostate + bandelettes
   patch_size: 8        # Taille des patches
   embed_dim: 64        # Dimension d'embedding
   num_layers: 4        # Nombre de couches encoder
@@ -80,10 +80,11 @@ loss:
   aux_loss: "cross_entropy"
   loss_weight: 0.7  # Poids du loss principal vs aux_loss
   
-  # Poids pour classes déséquilibrées (prostate est minoritaire)
+  # Poids pour classes déséquilibrées (prostate et bandelettes minoritaires)
   class_weights:
-    - 0.5   # background
+    - 0.3   # background
     - 1.5   # prostate
+    - 1.2   # bandelettes
 
 metrics:
   metrics:
@@ -175,23 +176,25 @@ misc:
   use_amp: true
 
 ######################################################
-# NOTES IMPORTANTES POUR PROSTATE
+# NOTES IMPORTANTES POUR PROSTATE + BANDELETTES
 ######################################################
 # 
 # 1. ADAPTATIONS PAR RAPPORT À BRATS:
 #    - in_channels: 4 → 2 (T2, ADC)
-#    - num_classes: 3 → 2 (background, prostate)
+#    - num_classes: 3 → 3 (background, prostate, bandelettes)
 #    - Batch size peut être plus petit
 #    - Augmentations plus agressives (dataset petit)
 #
-# 2. CLASSE DÉSÉQUILIBRÉE:
-#    - Prostate = minoritaire dans le volume
-#    - Utilise class_weights pour penaliser les erreurs prostate
+# 2. CLASSES DÉSÉQUILIBRÉES:
+#    - Prostate = minoritaire (poids 1.5)
+#    - Bandelettes = très minoritaire (poids 1.2)
+#    - Utilise class_weights pour penaliser les erreurs
 #    - Considère utiliser Focal Loss si Dice fails
 #
 # 3. PREPROCESSING:
 #    - Données doivent être prétraitées avec prostate_preprocess.py
 #    - Output: (2, 96, 96, 96) pour T2 et ADC
+#    - Label: 0=fond, 1=prostate, 2=bandelettes
 #    - Normalisées en [0, 1] par défaut
 #
 # 4. DONNÉES D'ENTRAÎNEMENT:
@@ -206,6 +209,7 @@ misc:
 #        --model_path ./experiments/prostate_seg/checkpoints/best.pt \
 #        --input_dir ./test_data/raw \
 #        --output_dir ./test_data/predictions \
-#        --save_nifti true
+#        --save_nifti true \
+#        --save_labels true
 #
 ######################################################

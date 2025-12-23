@@ -1,7 +1,8 @@
 """
-Script d'inférence pour segmentation de prostate avec SegFormer3D.
+Script d'inférence pour segmentation de prostate + bandelettes avec SegFormer3D.
 
 Charge un modèle entraîné et prédit sur de nouvelles données prostate en format nii.gz.
+Génère des segmentations multi-label (0=fond, 1=prostate, 2=bandelettes).
 
 Utilisation:
     python experiments/prostate_seg/inference_prostate.py \\
@@ -9,6 +10,7 @@ Utilisation:
         --input_dir ./test_data/raw \\
         --output_dir ./test_data/predictions \\
         --save_nifti true \\
+        --save_separate_labels true \\
         --save_prob_map true
 """
 
@@ -67,11 +69,11 @@ class ProstateInferencer:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Modèle non trouvé: {model_path}")
         
-        # Crée l'architecture (prostate: 2 in, 2 out)
+        # Crée l'architecture (prostate + bandelettes: 2 in, 3 out)
         model = build_architecture(
             name="segformer3d",
             in_channels=2,
-            num_classes=2,
+            num_classes=3,  # 3 classes: fond, prostate, bandelettes
             patch_size=8,
             embed_dim=64,
             num_layers=4,
@@ -251,9 +253,72 @@ class ProstateInferencer:
             volume_tensor = volume_tensor.unsqueeze(0)  # (1, 2, D, H, W)
             output = self.model(volume_tensor)
             output = torch.softmax(output, dim=1)
-            output = output[:, 1:2, :, :, :]  # Classe prostate
+            output = output[0]  # (3, D, H, W) - 3 classes
         
-        return output.squeeze().cpu().numpy()
+        return output.cpu().numpy()  # Retourne les probas pour les 3 classes
+    
+    def post_process_multiclass(
+        self,
+        probabilities: np.ndarray,
+        threshold_prostate: float = 0.5,
+        threshold_bandelettes: float = 0.5,
+        remove_small_components: bool = True,
+        min_component_size: int = 50
+    ) -> np.ndarray:
+        """
+        Post-traitement pour segmentation multi-classe.
+        
+        Args:
+            probabilities: Probabilités (3, D, H, W) ou (D, H, W)
+                - Si 3D: Channel 0=fond, 1=prostate, 2=bandelettes
+                - Si 2D: Prostate uniquement
+            threshold_prostate: Seuil pour prostate
+            threshold_bandelettes: Seuil pour bandelettes
+            remove_small_components: Enlever les petites composantes
+            min_component_size: Taille minimale d'une composante
+        
+        Returns:
+            Segmentation multi-classe (D, H, W) avec labels 0, 1, 2
+        """
+        # Gère le cas 3D et 2D
+        if probabilities.ndim == 3 and probabilities.shape[0] == 3:
+            prob_prostate = probabilities[1]  # Class 1
+            prob_bandelettes = probabilities[2]  # Class 2
+        else:
+            # Cas 2D ou probabilité unique
+            prob_prostate = probabilities if probabilities.ndim == 2 else probabilities.squeeze()
+            prob_bandelettes = np.zeros_like(prob_prostate)
+        
+        # Initialise la segmentation multi-label
+        segmentation = np.zeros_like(prob_prostate, dtype=np.uint8)
+        
+        # Binarise prostate
+        prostate_mask = (prob_prostate > threshold_prostate).astype(np.uint8)
+        
+        # Binarise bandelettes
+        bandelettes_mask = (prob_bandelettes > threshold_bandelettes).astype(np.uint8)
+        
+        # Combine (bandelettes > prostate en cas de conflit)
+        segmentation[prostate_mask > 0] = 1
+        segmentation[bandelettes_mask > 0] = 2
+        
+        # Enlève les petites composantes
+        if remove_small_components:
+            for label_id in [1, 2]:
+                labeled, num_components = label(segmentation == label_id)
+                for comp_id in range(1, num_components + 1):
+                    component = (labeled == comp_id)
+                    if component.sum() < min_component_size:
+                        segmentation[component] = 0
+        
+        # Opérations morphologiques
+        for label_id in [1, 2]:
+            mask = (segmentation == label_id)
+            mask = binary_closing(binary_opening(mask, iterations=1), iterations=1)
+            segmentation[~mask & (segmentation == label_id)] = 0
+            segmentation[mask & (segmentation == 0)] = label_id
+        
+        return segmentation.astype(np.uint8)
     
     def post_process(
         self,
@@ -263,7 +328,7 @@ class ProstateInferencer:
         min_component_size: int = 50
     ) -> np.ndarray:
         """
-        Post-traitement de la segmentation.
+        Post-traitement de la segmentation (compatibilité legacy).
         
         Args:
             segmentation: Probabilités (D, H, W)
@@ -340,6 +405,12 @@ def main():
         help="Sauvegarde les prédictions en nifti"
     )
     parser.add_argument(
+        "--save_separate_labels",
+        type=bool,
+        default=False,
+        help="Sauvegarde prostate et bandelettes dans des fichiers séparés"
+    )
+    parser.add_argument(
         "--save_prob_map",
         type=bool,
         default=False,
@@ -349,7 +420,13 @@ def main():
         "--threshold",
         type=float,
         default=0.5,
-        help="Seuil de binarisation"
+        help="Seuil de binarisation prostate"
+    )
+    parser.add_argument(
+        "--threshold_bandelettes",
+        type=float,
+        default=0.5,
+        help="Seuil de binarisation bandelettes"
     )
     
     args = parser.parse_args()
@@ -370,7 +447,8 @@ def main():
     
     print(f"\n📊 Inférence sur {len(patient_dirs)} patients")
     print(f"   Modèle: {args.model_path}")
-    print(f"   Sortie: {args.output_dir}\n")
+    print(f"   Sortie: {args.output_dir}")
+    print(f"   Seuils: prostate={args.threshold}, bandelettes={args.threshold_bandelettes}\n")
     
     # Prédit pour chaque patient
     for patient_dir in tqdm(patient_dirs, desc="Inférence"):
@@ -388,13 +466,14 @@ def main():
             t2, t2_img = inferencer.load_nifti(str(t2_path))
             adc, _ = inferencer.load_nifti(str(adc_path))
             
-            # Prédit
-            prob_map = inferencer.predict(t2, adc, use_sliding_window=True)
+            # Prédit - retourne probas (3, D, H, W)
+            prob_maps = inferencer.predict(t2, adc, use_sliding_window=True)
             
-            # Post-traitement
-            segmentation = inferencer.post_process(
-                prob_map,
-                threshold=args.threshold,
+            # Post-traitement multi-classe
+            segmentation = inferencer.post_process_multiclass(
+                prob_maps,
+                threshold_prostate=args.threshold,
+                threshold_bandelettes=args.threshold_bandelettes,
                 remove_small_components=True,
                 min_component_size=50
             )
@@ -406,9 +485,25 @@ def main():
                 seg_path = output_patient_dir / "segmentation_pred.nii.gz"
                 inferencer.save_nifti(segmentation, t2_img, str(seg_path))
             
+            # Sauvegarde les labels séparés si demandé
+            if args.save_separate_labels:
+                prostate_mask = (segmentation == 1).astype(np.uint8)
+                bandelettes_mask = (segmentation == 2).astype(np.uint8)
+                
+                prostate_path = output_patient_dir / "prostate_pred.nii.gz"
+                bandelettes_path = output_patient_dir / "bandelettes_pred.nii.gz"
+                
+                inferencer.save_nifti(prostate_mask, t2_img, str(prostate_path))
+                inferencer.save_nifti(bandelettes_mask, t2_img, str(bandelettes_path))
+            
             if args.save_prob_map:
-                prob_path = output_patient_dir / "probability_map.nii.gz"
-                inferencer.save_nifti(prob_map, t2_img, str(prob_path))
+                # Sauvegarde cartes de probas
+                prostate_prob_path = output_patient_dir / "prostate_probability.nii.gz"
+                bandelettes_prob_path = output_patient_dir / "bandelettes_probability.nii.gz"
+                
+                if prob_maps.ndim == 3 and prob_maps.shape[0] == 3:
+                    inferencer.save_nifti(prob_maps[1], t2_img, str(prostate_prob_path))
+                    inferencer.save_nifti(prob_maps[2], t2_img, str(bandelettes_prob_path))
             
         except Exception as e:
             warnings.warn(f"Erreur pour {patient_name}: {str(e)}")
