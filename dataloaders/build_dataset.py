@@ -29,9 +29,19 @@ def build_dataset(dataset_type: str, dataset_args: Dict):
             fold_id=dataset_args["fold_id"],
         )
         return dataset
+    elif dataset_type == "prostate_seg":
+        from .prostate_seg import ProstateSegDataset
+
+        dataset = ProstateSegDataset(
+            root_dir=dataset_args["root"],
+            is_train=dataset_args["train"],
+            transform=build_augmentations(dataset_args["train"]),
+            split_file=dataset_args.get("split_file", None),
+        )
+        return dataset
     else:
         raise ValueError(
-            "only brats2021 and brats2017 segmentation is currently supported!"
+            "Formats supportés: brats2021_seg, brats2017_seg, prostate_seg"
         )
 
 

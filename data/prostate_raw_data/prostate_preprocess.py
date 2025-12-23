@@ -1,0 +1,375 @@
+"""
+Script de prétraitement pour données de prostate au format nii.gz.
+
+Ce script:
+1. Charge les fichiers nii.gz T2, ADC et segmentation
+2. Resample à une taille uniforme (96x96x96)
+3. Normalise les intensités
+4. Convertit en format PyTorch .pt pour entraînement rapide
+
+Structure d'entrée attendue:
+    prostate_raw_data/
+    ├── patient_001/
+    │   ├── T2.nii.gz
+    │   ├── ADC.nii.gz
+    │   └── segmentation.nii.gz
+    ├── patient_002/
+    │   ├── T2.nii.gz
+    │   ├── ADC.nii.gz
+    │   └── segmentation.nii.gz
+    └── ...
+
+Structure de sortie:
+    prostate_preprocessed/
+    ├── patient_001/
+    │   ├── patient_001_modalities.pt  (2, 96, 96, 96) [T2, ADC]
+    │   └── patient_001_label.pt       (1, 96, 96, 96)
+    ├── patient_002/
+    │   ├── patient_002_modalities.pt
+    │   └── patient_002_label.pt
+    └── ...
+
+Utilisation:
+    python prostate_preprocess.py \\
+        --input_dir /path/to/prostate_raw_data \\
+        --output_dir /path/to/prostate_preprocessed \\
+        --target_size 96
+"""
+
+import os
+import argparse
+import numpy as np
+import torch
+import nibabel as nib
+from pathlib import Path
+from typing import Tuple, Dict, Any
+import warnings
+from scipy.ndimage import zoom
+from sklearn.preprocessing import StandardScaler
+import sys
+from tqdm import tqdm
+
+
+class ProstatePreprocessor:
+    """Préprocessor pour données de prostate nii.gz."""
+    
+    def __init__(
+        self,
+        target_size: int = 96,
+        resample_mode: str = "linear",
+        normalize_method: str = "minmax"
+    ) -> None:
+        """
+        Initialise le préprocessor.
+        
+        Args:
+            target_size (int): Taille cible pour resample (défaut: 96).
+            resample_mode (str): Mode de resampling ("linear", "nearest").
+            normalize_method (str): Méthode de normalisation ("minmax", "zscore").
+        """
+        self.target_size = target_size
+        self.resample_mode = resample_mode
+        self.normalize_method = normalize_method
+    
+    def load_nifti(self, filepath: str) -> np.ndarray:
+        """Charge un fichier nifti (.nii.gz)."""
+        try:
+            img = nib.load(filepath)
+            data = img.get_fdata()
+            return data
+        except Exception as e:
+            raise ValueError(f"Erreur lors du chargement {filepath}: {str(e)}")
+    
+    def resample_volume(
+        self,
+        volume: np.ndarray,
+        target_shape: Tuple[int, int, int],
+        order: int = 1,
+        mode: str = "constant"
+    ) -> np.ndarray:
+        """
+        Resample un volume à la taille cible.
+        
+        Args:
+            volume: Données d'entrée (D, H, W)
+            target_shape: Taille cible (96, 96, 96)
+            order: 1=bilinéaire, 0=nearest neighbor
+            mode: Mode de remplissage ("constant", "reflect")
+        
+        Returns:
+            Volume resamplé
+        """
+        if volume.shape == target_shape:
+            return volume
+        
+        # Calcule les facteurs de zoom
+        zoom_factors = [
+            target_shape[i] / volume.shape[i]
+            for i in range(3)
+        ]
+        
+        # Resample
+        if order == 0:  # Nearest neighbor pour segmentation
+            resampled = zoom(volume, zoom_factors, order=0, mode=mode)
+        else:  # Bilinéaire pour images
+            resampled = zoom(volume, zoom_factors, order=order, mode=mode)
+        
+        # Ajuste la taille exacte (artefacts de zoom)
+        if resampled.shape != target_shape:
+            output = np.zeros(target_shape, dtype=resampled.dtype)
+            slices = tuple(slice(0, min(resampled.shape[i], target_shape[i])) for i in range(3))
+            output[slices] = resampled[slices]
+            resampled = output
+        
+        return resampled
+    
+    def normalize_intensity(
+        self,
+        volume: np.ndarray,
+        mask: np.ndarray = None,
+        method: str = "minmax"
+    ) -> np.ndarray:
+        """
+        Normalise les intensités d'un volume.
+        
+        Args:
+            volume: Données d'entrée
+            mask: Mask optionnel pour normaliser seulement la région d'intérêt
+            method: "minmax" (0-1) ou "zscore" (gaussienne)
+        
+        Returns:
+            Volume normalisé
+        """
+        # Utilise le mask si fourni, sinon tout le volume
+        if mask is not None:
+            data_to_normalize = volume[mask > 0]
+        else:
+            data_to_normalize = volume.flatten()
+            data_to_normalize = data_to_normalize[data_to_normalize > 0]  # Exclut les zéros
+        
+        if len(data_to_normalize) == 0:
+            warnings.warn("Pas de données non-zéro pour normaliser")
+            return volume
+        
+        if method == "minmax":
+            vmin = data_to_normalize.min()
+            vmax = data_to_normalize.max()
+            if vmax > vmin:
+                normalized = (volume - vmin) / (vmax - vmin)
+                normalized = np.clip(normalized, 0, 1)
+            else:
+                normalized = volume
+        
+        elif method == "zscore":
+            vmean = data_to_normalize.mean()
+            vstd = data_to_normalize.std()
+            if vstd > 0:
+                normalized = (volume - vmean) / vstd
+                normalized = np.clip(normalized, -3, 3)
+                normalized = (normalized + 3) / 6  # Ramène à [0, 1]
+            else:
+                normalized = volume
+        
+        else:
+            raise ValueError(f"Méthode inconnue: {method}")
+        
+        return normalized.astype(np.float32)
+    
+    def preprocess_case(
+        self,
+        case_dir: str,
+        case_name: str,
+        output_dir: str
+    ) -> Dict[str, Any]:
+        """
+        Prétraite un patient complet.
+        
+        Args:
+            case_dir: Répertoire du patient (contient T2.nii.gz, ADC.nii.gz, seg.nii.gz)
+            case_name: Nom du patient (ex: "patient_001")
+            output_dir: Répertoire de sortie
+        
+        Returns:
+            Dict avec statut et infos
+        """
+        result = {
+            "case": case_name,
+            "success": False,
+            "message": "",
+            "stats": {}
+        }
+        
+        try:
+            # Chemins des fichiers
+            t2_path = os.path.join(case_dir, "T2.nii.gz")
+            adc_path = os.path.join(case_dir, "ADC.nii.gz")
+            seg_path = os.path.join(case_dir, "segmentation.nii.gz")
+            
+            # Vérifie l'existence des fichiers
+            if not os.path.exists(t2_path):
+                raise FileNotFoundError(f"T2.nii.gz manquant dans {case_dir}")
+            if not os.path.exists(adc_path):
+                raise FileNotFoundError(f"ADC.nii.gz manquant dans {case_dir}")
+            if not os.path.exists(seg_path):
+                raise FileNotFoundError(f"segmentation.nii.gz manquant dans {case_dir}")
+            
+            # Charge les données
+            t2 = self.load_nifti(t2_path)
+            adc = self.load_nifti(adc_path)
+            seg = self.load_nifti(seg_path)
+            
+            # Resample à la taille cible
+            target = (self.target_size, self.target_size, self.target_size)
+            t2_resampled = self.resample_volume(t2, target, order=1)
+            adc_resampled = self.resample_volume(adc, target, order=1)
+            seg_resampled = self.resample_volume(seg, target, order=0)
+            
+            # Binarise la segmentation
+            seg_binary = (seg_resampled > 0.5).astype(np.float32)
+            
+            # Crée un mask pour la normalisation
+            mask = seg_binary + (seg_resampled > 0)  # Inclut la région de prostate
+            
+            # Normalise les intensités
+            t2_norm = self.normalize_intensity(t2_resampled, mask, method=self.normalize_method)
+            adc_norm = self.normalize_intensity(adc_resampled, mask, method=self.normalize_method)
+            
+            # Empile les modalités: (2, D, H, W)
+            modalities = np.stack([t2_norm, adc_norm], axis=0)
+            label = seg_binary[np.newaxis, :, :, :]  # (1, D, H, W)
+            
+            # Convertit en tenseurs PyTorch
+            modalities_tensor = torch.from_numpy(modalities).float()
+            label_tensor = torch.from_numpy(label).float()
+            
+            # Crée le répertoire de sortie
+            output_patient_dir = os.path.join(output_dir, case_name)
+            os.makedirs(output_patient_dir, exist_ok=True)
+            
+            # Sauvegarde les fichiers .pt
+            modality_path = os.path.join(output_patient_dir, f"{case_name}_modalities.pt")
+            label_path = os.path.join(output_patient_dir, f"{case_name}_label.pt")
+            
+            torch.save(modalities_tensor, modality_path)
+            torch.save(label_tensor, label_path)
+            
+            # Collecte les stats
+            result["success"] = True
+            result["message"] = f"✅ Prétraité avec succès"
+            result["stats"] = {
+                "input_shape": t2.shape,
+                "output_shape": tuple(modalities_tensor.shape),
+                "t2_range": (float(t2_norm.min()), float(t2_norm.max())),
+                "adc_range": (float(adc_norm.min()), float(adc_norm.max())),
+                "prostate_voxels": int(seg_binary.sum()),
+                "total_voxels": int(np.prod(seg_binary.shape)),
+            }
+        
+        except Exception as e:
+            result["success"] = False
+            result["message"] = f"❌ Erreur: {str(e)}"
+        
+        return result
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Prétraite les données de prostate nii.gz pour SegFormer3D"
+    )
+    parser.add_argument(
+        "--input_dir",
+        type=str,
+        default="./data/prostate_raw_data",
+        help="Répertoire contenant les données brutes (défaut: ./data/prostate_raw_data)"
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="./data/prostate_preprocessed",
+        help="Répertoire de sortie pour données prétraitées (défaut: ./data/prostate_preprocessed)"
+    )
+    parser.add_argument(
+        "--target_size",
+        type=int,
+        default=96,
+        help="Taille cible pour resample (défaut: 96)"
+    )
+    parser.add_argument(
+        "--normalize_method",
+        type=str,
+        default="minmax",
+        choices=["minmax", "zscore"],
+        help="Méthode de normalisation (défaut: minmax)"
+    )
+    parser.add_argument(
+        "--skip_existing",
+        action="store_true",
+        help="Saute les patients déjà prétraités"
+    )
+    
+    args = parser.parse_args()
+    
+    # Crée le répertoire de sortie
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Initialise le préprocessor
+    preprocessor = ProstatePreprocessor(
+        target_size=args.target_size,
+        normalize_method=args.normalize_method
+    )
+    
+    # Trouve tous les répertoires de patients
+    input_path = Path(args.input_dir)
+    patient_dirs = sorted([d for d in input_path.iterdir() if d.is_dir()])
+    
+    if not patient_dirs:
+        print(f"❌ Aucun répertoire de patient trouvé dans {args.input_dir}")
+        print(f"Structure attendue: {args.input_dir}/patient_001/{{T2.nii.gz, ADC.nii.gz, segmentation.nii.gz}}")
+        return
+    
+    print(f"\n📊 Prétraitement de {len(patient_dirs)} patients...")
+    print(f"   Entrée: {args.input_dir}")
+    print(f"   Sortie: {args.output_dir}")
+    print(f"   Taille cible: {args.target_size}x{args.target_size}x{args.target_size}")
+    print(f"   Normalisation: {args.normalize_method}\n")
+    
+    # Prétraite chaque patient
+    results = []
+    for patient_dir in tqdm(patient_dirs, desc="Prétraitement"):
+        case_name = patient_dir.name
+        
+        # Vérifie si déjà prétraité
+        output_patient_dir = os.path.join(args.output_dir, case_name)
+        if args.skip_existing and os.path.exists(output_patient_dir):
+            print(f"⏭️  {case_name}: déjà prétraité, skipper")
+            continue
+        
+        result = preprocessor.preprocess_case(
+            str(patient_dir),
+            case_name,
+            args.output_dir
+        )
+        results.append(result)
+        
+        # Affiche le statut
+        status = "✅" if result["success"] else "❌"
+        print(f"{status} {case_name}: {result['message']}")
+    
+    # Résumé final
+    success_count = sum(1 for r in results if r["success"])
+    print(f"\n{'='*60}")
+    print(f"🎯 RÉSUMÉ: {success_count}/{len(results)} patients prétraités avec succès")
+    
+    if success_count > 0:
+        print(f"\n📁 Données prétraitées dans: {args.output_dir}")
+        print(f"\n📝 Prochaines étapes:")
+        print(f"   1. Créer les fichiers CSV (train.csv, validation.csv)")
+        print(f"   2. Configurer un fichier config_prostate.yaml")
+        print(f"   3. Lancer l'entraînement avec trainer_ddp.py")
+    
+    if success_count < len(results):
+        print(f"\n⚠️  {len(results) - success_count} erreurs - vérifiez les logs ci-dessus")
+
+
+if __name__ == "__main__":
+    main()

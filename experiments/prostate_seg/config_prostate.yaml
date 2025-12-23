@@ -1,0 +1,211 @@
+######################################################
+## Configuration pour segmentation de prostate avec SegFormer3D
+## 
+## Usage:
+##   python train_scripts/trainer_ddp.py --config experiments/prostate_seg/config_prostate.yaml
+######################################################
+
+# ============ DATA ============
+# Format: prostate_seg (charge depuis .pt prétraités)
+data:
+  dataset_type: "prostate_seg"  # Nouveau dataset pour prostate
+  
+  # Arguments du dataset
+  dataset_args:
+    # Répertoire contenant train.csv, validation.csv et dossiers prétraités
+    root: "./data/prostate_data"
+    train: true
+    # Optionnel: chemin personnalisé au fichier CSV
+    # split_file: "./data/prostate_data/custom_train.csv"
+
+# ============ MODEL ============
+model:
+  # Paramètres essentiels pour prostate
+  name: "segformer3d"
+  in_channels: 2       # T2, ADC (au lieu de 4 pour BraTS)
+  num_classes: 2       # background + prostate (au lieu de 3 pour BraTS)
+  patch_size: 8        # Taille des patches
+  embed_dim: 64        # Dimension d'embedding
+  num_layers: 4        # Nombre de couches encoder
+  num_heads: 4         # Nombre de heads attention
+  mlp_ratio: 4         # Ratio hidden dim / embed dim
+  qkv_bias: true
+  drop_rate: 0.1
+  attn_drop_rate: 0.0
+  drop_path_rate: 0.1
+  use_checkpoint: false
+  use_abs_pos_embed: true
+
+# ============ AUGMENTATION ============
+augmentation:
+  # Augmentations MONAI appliquées durant entraînement
+  # Les augmentations sont plus agressives pour prostate car dataset petit
+  augmentations:
+    - type: "RandRotate90d"
+      prob: 0.5
+      spatial_axes: [[1, 2], [0, 2], [0, 1]]
+    
+    - type: "RandAffined"
+      prob: 0.3
+      rotate_range: [0.26, 0.26, 0.26]  # ±15°
+      shear_range: [0.1, 0.1, 0.1]
+      translate_range: [10, 10, 10]
+      scale_range: [0.1, 0.1, 0.1]
+      mode: "bilinear"
+    
+    - type: "RandGaussianNoised"
+      prob: 0.2
+      std: 0.01
+    
+    - type: "RandAdjustContrastd"
+      prob: 0.2
+      gamma: [0.8, 1.2]
+    
+    - type: "RandFlipd"
+      prob: 0.5
+      spatial_axis: 0
+    
+    - type: "RandFlipd"
+      prob: 0.5
+      spatial_axis: 1
+    
+    - type: "RandFlipd"
+      prob: 0.5
+      spatial_axis: 2
+
+# ============ LOSS & METRICS ============
+loss:
+  # Loss principal: Dice + Cross Entropy
+  loss_fn: "dice_loss"
+  aux_loss: "cross_entropy"
+  loss_weight: 0.7  # Poids du loss principal vs aux_loss
+  
+  # Poids pour classes déséquilibrées (prostate est minoritaire)
+  class_weights:
+    - 0.5   # background
+    - 1.5   # prostate
+
+metrics:
+  metrics:
+    - "dice"
+    - "hausdorff"
+    - "surface_dice"
+
+# ============ TRAINING ============
+training:
+  # Optimiseur
+  optimizer: "adamw"
+  lr: 0.001            # Learning rate initial
+  weight_decay: 0.01
+  
+  # Scheduler
+  scheduler: "cosine"
+  warmup_epochs: 10
+  
+  # Epochs
+  num_epochs: 200
+  
+  # Batch
+  batch_size: 4        # Petit batch (GPU mémoire)
+  num_workers: 4       # DataLoader workers
+  
+  # Gradient
+  gradient_clip_val: 1.0
+  accumulation_steps: 1
+
+# ============ VALIDATION ============
+validation:
+  # Fréquence
+  val_interval: 1      # Valide tous les epochs
+  
+  # Metrics de tracking
+  best_metric: "dice"
+  mode: "max"
+  
+  # EarlyStopping
+  early_stopping:
+    enabled: true
+    patience: 30       # Stop après 30 epochs sans amélioration
+    min_delta: 0.001
+
+# ============ CHECKPOINT & LOGGING ============
+checkpoint:
+  # Sauvegarde
+  save_interval: 1           # Sauvegarde tous les epochs
+  save_best_only: false      # Sauvegarde toujours + best
+  keep_last_k: 3            # Garde les 3 derniers checkpoints
+  
+  # Répertoire de sauvegarde
+  save_dir: "./experiments/prostate_seg/checkpoints"
+
+logging:
+  # Logging
+  log_interval: 50           # Log tous les 50 batches
+  log_dir: "./experiments/prostate_seg/logs"
+  
+  # Wandb (optionnel)
+  use_wandb: false
+  wandb_project: "segformer3d-prostate"
+  wandb_entity: "your-team"  # Modifiez selon besoin
+
+# ============ INFERENCE ============
+inference:
+  # Sliding window pour volumes larges
+  use_sliding_window: true
+  sw_batch_size: 2
+  sw_overlap: 0.5  # 50% overlap
+  
+  # Post-processing
+  post_processing:
+    remove_small_components: true
+    min_component_size: 10
+    smooth_mask: false
+
+# ============ MISCELLANEOUS ============
+misc:
+  # Device
+  device: "cuda"
+  seed: 42
+  
+  # Distributed training (DDP)
+  distributed: true
+  backend: "nccl"
+  
+  # Mixed precision
+  use_amp: true
+
+######################################################
+# NOTES IMPORTANTES POUR PROSTATE
+######################################################
+# 
+# 1. ADAPTATIONS PAR RAPPORT À BRATS:
+#    - in_channels: 4 → 2 (T2, ADC)
+#    - num_classes: 3 → 2 (background, prostate)
+#    - Batch size peut être plus petit
+#    - Augmentations plus agressives (dataset petit)
+#
+# 2. CLASSE DÉSÉQUILIBRÉE:
+#    - Prostate = minoritaire dans le volume
+#    - Utilise class_weights pour penaliser les erreurs prostate
+#    - Considère utiliser Focal Loss si Dice fails
+#
+# 3. PREPROCESSING:
+#    - Données doivent être prétraitées avec prostate_preprocess.py
+#    - Output: (2, 96, 96, 96) pour T2 et ADC
+#    - Normalisées en [0, 1] par défaut
+#
+# 4. DONNÉES D'ENTRAÎNEMENT:
+#    - Générez train.csv et validation.csv avec create_prostate_splits.py
+#    - Format: data_path, case_name
+#
+# 5. ENTRAÎNEMENT:
+#    python train_scripts/trainer_ddp.py --config experiments/prostate_seg/config_prostate.yaml
+#
+# 6. INFERENCE:
+#    python experiments/prostate_seg/inference_prostate.py \
+#        --model_path ./experiments/prostate_seg/checkpoints/best.pt \
+#        --input_dir ./test_data/raw \
+#        --output_dir ./test_data/predictions \
+#        --save_nifti true
+#
+######################################################

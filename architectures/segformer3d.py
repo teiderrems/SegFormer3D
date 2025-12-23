@@ -1,3 +1,37 @@
+"""
+SegFormer3D : Architecture de Segmentation 3D basée sur Transformateur
+
+Ce module implémente SegFormer3D, une adaptation 3D du modèle SegFormer pour la segmentation
+sémantique d'images médicales volumétriques. L'architecture combine un encodeur Transformer
+hiérarchique avec un décodeur de fusion multi-échelle.
+
+Architecture:
+    Encodeur: MixVisionTransformer (4 étapes pyramidales)
+    Décodeur: SegFormerDecoderHead (fusion multi-échelle avec MLP linéaires)
+
+Caractéristiques principales:
+    - Attention réduite spatialement pour efficacité
+    - Opérations 3D pour traiter des volumes complets
+    - Initialisation des poids personnalisée (Kaiming/Truncated Normal)
+    - Support du calcul distribué (DDP)
+
+Références académiques:
+    - SegFormer: "Simple and Efficient Design for Semantic Segmentation with Transformers"
+    - Adapté pour les images 3D (volumes médicaux)
+
+Exemple d'utilisation:
+    config = {
+        "model_parameters": {
+            "in_channels": 4,
+            "embed_dims": [32, 64, 160, 256],
+            "num_classes": 3,
+            ...
+        }
+    }
+    model = build_segformer3d_model(config)
+    output = model(input_volume)  # (B, 4, D, H, W) -> (B, 3, D, H, W)
+"""
+
 import torch
 import math
 import copy
@@ -7,7 +41,31 @@ from functools import partial
 from typing import Tuple, List
 
 def build_segformer3d_model(config=None):
-    model = SegFormer3D(
+    """Crée une instance du modèle SegFormer3D à partir d'un dictionnaire de configuration.
+    
+    Args:
+        config (dict): Dictionnaire de configuration contenant:
+            - config["model_parameters"]["in_channels"]: Nombre de canaux d'entrée (généralement 4 pour T1, T1CE, T2, FLAIR)
+            - config["model_parameters"]["sr_ratios"]: Taux de réduction spatiale pour l'attention
+            - config["model_parameters"]["embed_dims"]: Dimensions de plongement à chaque étape
+            - config["model_parameters"]["patch_kernel_size"]: Taille du noyau pour plongement de patchs
+            - config["model_parameters"]["patch_stride"]: Pas de convolution
+            - config["model_parameters"]["patch_padding"]: Rembourrage
+            - config["model_parameters"]["mlp_ratios"]: Ratio d'expansion du MLP
+            - config["model_parameters"]["num_heads"]: Nombre de têtes d'attention
+            - config["model_parameters"]["depths"]: Nombre de blocs Transformer
+            - config["model_parameters"]["decoder_head_embedding_dim"]: Dimension de la tête du décodeur
+            - config["model_parameters"]["num_classes"]: Nombre de classes de segmentation
+            - config["model_parameters"]["decoder_dropout"]: Taux de dropout du décodeur
+    
+    Returns:
+        SegFormer3D: Instance du modèle configuré
+    
+    Exemple:
+        >>> config = load_config("config.yaml")
+        >>> model = build_segformer3d_model(config)
+    """
+    model=SegFormer3D(
         in_channels=config["model_parameters"]["in_channels"],
         sr_ratios=config["model_parameters"]["sr_ratios"],
         embed_dims=config["model_parameters"]["embed_dims"],
@@ -27,6 +85,25 @@ def build_segformer3d_model(config=None):
 
 
 class SegFormer3D(nn.Module):
+    """Modèle SegFormer3D complet : Encodeur + Décodeur pour segmentation 3D.
+    
+    Architecture:
+        1. Encodeur MixVisionTransformer: Extrait 4 niveaux pyramidaux de caractéristiques
+        2. Décodeur SegFormerDecoderHead: Fusionne et upsamples les caractéristiques
+    
+    Processus en avant:
+        Input(B, C_in, D, H, W) 
+            -> Encodeur (4 étapes) -> [c1, c2, c3, c4]
+            -> Décodeur (fusion multi-échelle, upsampling x4)
+            -> Output(B, num_classes, D, H, W)
+    
+    Avantages:
+        - Efficace en mémoire grâce à l'attention réduite spatialement
+        - Opérations 3D natives pour volumes médicaux
+        - Fusion multi-échelle robuste
+        - Initialisation des poids optimisée
+    """
+    
     def __init__(
         self,
         in_channels: int = 4,
@@ -42,21 +119,24 @@ class SegFormer3D(nn.Module):
         num_classes: int = 3,
         decoder_dropout: float = 0.0,
     ):
-        """
-        in_channels: number of the input channels
-        img_volume_dim: spatial resolution of the image volume (Depth, Width, Height)
-        sr_ratios: the rates at which to down sample the sequence length of the embedded patch
-        embed_dims: hidden size of the PatchEmbedded input
-        patch_kernel_size: kernel size for the convolution in the patch embedding module
-        patch_stride: stride for the convolution in the patch embedding module
-        patch_padding: padding for the convolution in the patch embedding module
-        mlp_ratios: at which rate increases the projection dim of the hidden_state in the mlp
-        num_heads: number of attention heads
-        depths: number of attention layers
-        decoder_head_embedding_dim: projection dimension of the mlp layer in the all-mlp-decoder module
-        num_classes: number of the output channel of the network
-        decoder_dropout: dropout rate of the concatenated feature maps
-
+        """Initialise le modèle SegFormer3D.
+        
+        Args:
+            in_channels (int): Nombre de canaux d'entrée (ex: 4 pour BraTS)
+            sr_ratios (list): Taux de réduction spatiale pour l'attention à chaque étape.
+                Exemple: [4, 2, 1, 1] réduit progressivement les clés/valeurs
+            embed_dims (list): Dimensions de plongement à chaque étape.
+                Exemple: [32, 64, 160, 256] pour progression graduelle
+            patch_kernel_size (list): Taille du noyau de convolution pour plongement de patchs
+            patch_stride (list): Pas de convolution (détermine la réduction spatiale)
+            patch_padding (list): Rembourrage de convolution
+            mlp_ratios (list): Ratio d'expansion du MLP à chaque étape.
+                Exemple: [4, 4, 4, 4] = dimension MLP = 4 * embed_dim
+            num_heads (list): Nombre de têtes d'attention par étape
+            depths (list): Nombre de blocs Transformer par étape
+            decoder_head_embedding_dim (int): Dimension de plongement de la tête du décodeur (256)
+            num_classes (int): Nombre de classes de segmentation (ex: 3 pour BraTS)
+            decoder_dropout (float): Taux de dropout après fusion dans le décodeur
         """
         super().__init__()
         self.segformer_encoder = MixVisionTransformer(
@@ -81,6 +161,17 @@ class SegFormer3D(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
+        """Initialise les poids du modèle selon le type de couche.
+        
+        Stratégies d'initialisation utilisées:
+            - Linear: Normale tronquée (std=0.02)
+            - LayerNorm: Poids=1, Bias=0
+            - BatchNorm: Poids=1, Bias=0
+            - Conv2d/Conv3d: Kaiming normal (fan_out)
+        
+        Args:
+            m (nn.Module): Module à initialiser
+        """
         if isinstance(m, nn.Linear):
             nn.init.trunc_normal_(m.weight, std=0.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
@@ -109,16 +200,52 @@ class SegFormer3D(nn.Module):
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # embedding the input
+        """Passe en avant du modèle complet.
+        
+        Processus:
+            1. Encoder l'entrée en caractéristiques pyramidales (4 niveaux)
+            2. Décoder et fusionner les caractéristiques
+            3. Générer la carte de segmentation finale
+        
+        Args:
+            x (torch.Tensor): Volume d'entrée (B, in_channels, D, H, W)
+        
+        Returns:
+            torch.Tensor: Prédictions segmentation (B, num_classes, D, H, W)
+        
+        Exemple:
+            >>> model = SegFormer3D(in_channels=4, num_classes=3)
+            >>> input_vol = torch.randn(1, 4, 128, 128, 128)
+            >>> output = model(input_vol)  # (1, 3, 128, 128, 128)
+        """
+        # Encodage en caractéristiques pyramidales
         x = self.segformer_encoder(x)
-        # # unpacking the embedded features generated by the transformer
+        
+        # Déballage des 4 niveaux de caractéristiques
+        # c1: résolution maximale (1/4), c4: résolution minimale
         c1, c2, c3, c4 = x[0], x[1], x[2], x[3]
-        # decoding the embedded features
+        
+        # Décodage avec fusion multi-échelle
         x = self.segformer_decoder(c1, c2, c3, c4)
         return x
     
-# ----------------------------------------------------- encoder -----------------------------------------------------
+# ----------------------------------------------------- ENCODEUR 3D AVEC PATCHS PYRAMIDAUX -----
+
 class PatchEmbedding(nn.Module):
+    """Couche de plongement de patchs pour volumes 3D.
+    
+    Convertit un volume d'entrée en patchs intégrés via convolution 3D, suivi de normalisation.
+    
+    Processus:
+        Input (B, C_in, D, H, W)
+            -> Conv3d (C_in -> embed_dim)
+            -> Aplatissement et transposition
+            -> LayerNorm
+            -> Output (B, num_patches, embed_dim)
+    
+    où num_patches = (D/stride) * (H/stride) * (W/stride)
+    """
+    
     def __init__(
         self,
         in_channel: int = 4,
@@ -127,9 +254,14 @@ class PatchEmbedding(nn.Module):
         stride: int = 4,
         padding: int = 3,
     ):
-        """
-        in_channels: number of the channels in the input volume
-        embed_dim: embedding dimmesion of the patch
+        """Initialise le module de plongement de patchs.
+        
+        Args:
+            in_channel (int): Nombre de canaux d'entrée (ex: 4 pour modalités MRI)
+            embed_dim (int): Dimension du vecteur de plongement
+            kernel_size (int): Taille du noyau de convolution 3D
+            stride (int): Pas de la convolution (détermine la réduction spatiale)
+            padding (int): Rembourrage de convolution
         """
         super().__init__()
         self.patch_embeddings = nn.Conv3d(
@@ -142,14 +274,36 @@ class PatchEmbedding(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x):
-        # standard embedding patch
+        """Crée les patchs intégrés à partir du volume d'entrée.
+        
+        Args:
+            x (torch.Tensor): Volume d'entrée (B, in_channel, D, H, W)
+        
+        Returns:
+            torch.Tensor: Patchs intégrés (B, num_patches, embed_dim)
+        """
+        # Applique la convolution 3D pour créer les patchs
         patches = self.patch_embeddings(x)
+        # Transforme de (B, embed_dim, D', H', W') en (B, D'*H'*W', embed_dim)
         patches = patches.flatten(2).transpose(1, 2)
+        # Normalise par couche
         patches = self.norm(patches)
         return patches
 
 
 class SelfAttention(nn.Module):
+    """Mécanisme d'attention multi-tête avec réduction spatiale (Spatial Reduction Attention).
+    
+    Implémente l'attention dans le contexte SegFormer:
+    - Réduit les clés et valeurs par sr_ratio pour efficacité mémoire
+    - Utilise scaled_dot_product_attention optimisé (PyTorch 2.0+)
+    - Support complet du dropout pour régularisation
+    
+    Complexité mémoire:
+        Sans réduction: O(N²) où N = nombre de patchs
+        Avec réduction: O(N²/r) où r = sr_ratio
+    """
+    
     def __init__(
         self,
         embed_dim: int = 768,
@@ -159,13 +313,19 @@ class SelfAttention(nn.Module):
         attn_dropout: float = 0.0,
         proj_dropout: float = 0.0,
     ):
-        """
-        embed_dim : hidden size of the PatchEmbedded input
-        num_heads: number of attention heads
-        sr_ratio: the rate at which to down sample the sequence length of the embedded patch
-        qkv_bias: whether or not the linear projection has bias
-        attn_dropout: the dropout rate of the attention component
-        proj_dropout: the dropout rate of the final linear projection
+        """Initialise le module d'attention multi-tête.
+        
+        Args:
+            embed_dim (int): Dimension d'intégration (dimension cachée)
+            num_heads (int): Nombre de têtes d'attention
+            sr_ratio (int): Taux de réduction spatiale pour clés/valeurs.
+                            sr_ratio=1 = pas de réduction, sr_ratio=4 = réduction 4x
+            qkv_bias (bool): Si True, ajoute un biais aux projections linéaires
+            attn_dropout (float): Taux de dropout appliqué aux poids d'attention
+            proj_dropout (float): Taux de dropout appliqué à la projection finale
+        
+        Raises:
+            AssertionError: Si embed_dim n'est pas divisible par num_heads
         """
         super().__init__()
         assert (
@@ -194,7 +354,23 @@ class SelfAttention(nn.Module):
             self.sr_norm = nn.LayerNorm(embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # (batch_size, num_patches, hidden_size)
+        """Applique l'attention multi-tête avec réduction spatiale.
+        
+        Processus:
+            1. Projette l'entrée en Queries (Q)
+            2. Si sr_ratio > 1: Réduit spatialement pour Keys (K) et Values (V)
+            3. Calcule Attention = softmax(Q·K^T/√d)·V
+            4. Projette et applique dropout
+        
+        Args:
+            x (torch.Tensor): Patchs intégrés (B, N, embed_dim)
+        
+        Returns:
+            torch.Tensor: Sortie attention (B, N, embed_dim)
+        
+        Mathématiques:
+            Attention(Q,K,V) = softmax(Q @ K^T / √(d_k)) @ V
+        """
         B, N, C = x.shape
 
         # (batch_size, num_head, sequence_length, embed_dim)

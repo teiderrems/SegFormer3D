@@ -1,0 +1,405 @@
+📋 INDEX COMPLET - SegFormer3D Adaptation Prostate
+═══════════════════════════════════════════════════════
+
+Bienvenue! Voici un guide complet pour naviguer dans l'adaptation de SegFormer3D 
+pour la segmentation de prostate avec fichiers nii.gz.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📚 DOCUMENTATION (A LIRE D'ABORD)
+═════════════════════════════════
+
+1. 🟢 ADAPTATION_PROSTATE_README.txt
+   Niveau: Débutant
+   Contenu:
+     • Résumé exécutif du projet
+     • Vue d'ensemble des fichiers créés
+     • Démarrage rapide (3 commandes)
+     • Différences BraTS ↔ Prostate
+     • Checklist avant entraînement
+   👉 COMMENCEZ PAR CE FICHIER
+
+2. 🔵 GUIDE_PROSTATE_COMPLETE_FR.md
+   Niveau: Intermédiaire
+   Contenu:
+     • Explications détaillées de chaque étape
+     • Structure des données complète
+     • Pipeline complet (prétraitement → inférence)
+     • Exemples pratiques (bash + Python)
+     • Dépannage et solutions
+     • Configuration avancée
+   👉 POUR COMPRENDRE LE WORKFLOW COMPLET
+
+3. 🟡 FICHIERS_PROSTATE_RESUME.txt
+   Niveau: Référence
+   Contenu:
+     • Description détaillée de chaque fichier créé
+     • Statistiques et tailles
+     • Modifications aux fichiers existants
+     • Checklist d'implémentation
+     • Points clés à retenir
+   👉 POUR RÉFÉRENCE LORS DU DÉVELOPPEMENT
+
+4. 📋 INDEX_PROSTATE.txt (CE FICHIER)
+   • Vous êtes ici!
+   • Navigation dans la documentation
+   • Structure du projet
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🗂️ STRUCTURE DES FICHIERS
+═════════════════════════
+
+CODE PYTHON - Prêt à utiliser
+──────────────────────────────
+
+1. 📦 Dataloaders (Interface de données)
+   Fichier: dataloaders/prostate_seg.py (12 KB, ~320 lignes)
+   Classes:
+     • ProstateSegDataset
+       └─ Charge données .pt, applique augmentations
+     • ProstateSegDatasetMultiModal
+       └─ Support modalités variables
+   Utilisation dans config:
+     dataset_type: "prostate_seg"
+     dataset_args:
+       root: "./data/prostate_data"
+
+2. 🔧 Prétraitement (NII.GZ → PyTorch)
+   Fichier: data/prostate_raw_data/prostate_preprocess.py (16 KB, ~450 lignes)
+   Classe:
+     • ProstatePreprocessor
+       ├─ load_nifti(): Charge fichiers nii.gz
+       ├─ resample_volume(): Resample 96×96×96
+       ├─ normalize_intensity(): Normalisation
+       └─ preprocess_case(): Traite un patient complet
+   CLI:
+     python prostate_preprocess.py \
+        --input_dir ./data/prostate_raw_data \
+        --output_dir ./data/prostate_data/preprocessed
+
+3. 📊 Générateur de Splits
+   Fichier: data/prostate_raw_data/create_prostate_splits.py (8 KB, ~280 lignes)
+   Fonctions:
+     • get_case_names(): Liste patients
+     • train_val_split(): Split 80-20
+     • kfold_split(): K-fold cross-validation
+   CLI:
+     python create_prostate_splits.py \
+        --input_dir ./data/prostate_data/preprocessed \
+        --kfold 5
+
+4. 🧠 Inférence (Prédiction)
+   Fichier: experiments/prostate_seg/inference_prostate.py (16 KB, ~450 lignes)
+   Classe:
+     • ProstateInferencer
+       ├─ load_model(): Charge checkpoint
+       ├─ predict(): Inférence (simple ou sliding window)
+       ├─ post_process(): Nettoyage segmentation
+       └─ save_nifti(): Export résultat
+   CLI:
+     python inference_prostate.py \
+        --model_path ./checkpoint/best.pt \
+        --input_dir ./test_data \
+        --output_dir ./predictions
+
+CONFIGURATION
+─────────────
+
+5. ⚙️ Configuration Entraînement
+   Fichier: experiments/prostate_seg/config_prostate.yaml (8 KB)
+   Paramètres clés:
+     data:
+       dataset_type: "prostate_seg"
+       dataset_args:
+         root: "./data/prostate_data"
+     
+     model:
+       in_channels: 2          # T2, ADC
+       num_classes: 2          # bg, prostate
+       embed_dim: 64
+       num_layers: 4
+     
+     training:
+       lr: 0.001
+       batch_size: 4
+       num_epochs: 200
+   📝 À adapter selon vos données
+
+SCRIPTS UTILITAIRES
+───────────────────
+
+6. 🚀 Quick Start (Automatisation)
+   Fichier: ./quick_start_prostate.sh (12 KB)
+   Étapes:
+     1. Prétraitement interactif
+     2. Génération splits
+     3. Lancement entraînement (optionnel)
+     4. Inférence (optionnel)
+   Utilisation:
+     chmod +x quick_start_prostate.sh
+     ./quick_start_prostate.sh /chemin/données
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔄 WORKFLOW COMPLET (Étape par étape)
+══════════════════════════════════════
+
+ÉTAPE 1: PRÉPARER LES DONNÉES (Vos données)
+────────────────────────────────────────────
+Structure attendue:
+  data/prostate_raw_data/
+  ├── patient_001/
+  │   ├── T2.nii.gz              ← IRM T2
+  │   ├── ADC.nii.gz             ← IRM ADC
+  │   └── segmentation.nii.gz    ← Segmentation (0/1)
+  ├── patient_002/
+  └── ...
+
+📖 Pour plus: GUIDE_PROSTATE_COMPLETE_FR.md → Section "Structure des données"
+
+ÉTAPE 2: PRÉTRAITEMENT (NII.GZ → PyTorch)
+──────────────────────────────────────────
+Commande:
+  python data/prostate_raw_data/prostate_preprocess.py \
+     --input_dir ./data/prostate_raw_data \
+     --output_dir ./data/prostate_data/preprocessed \
+     --target_size 96
+
+Processus:
+  1. Charge chaque fichier nii.gz
+  2. Resample à 96×96×96
+  3. Normalise intensités [0, 1]
+  4. Empile T2 + ADC = (2, 96, 96, 96)
+  5. Binarise segmentation
+  6. Sauvegarde en .pt
+
+Output:
+  data/prostate_data/preprocessed/
+  ├── patient_001/
+  │   ├── patient_001_modalities.pt  (2, 96, 96, 96)
+  │   └── patient_001_label.pt       (1, 96, 96, 96)
+  └── ...
+
+Code: dataloaders/prostate_seg.py → ProstatePreprocessor
+📖 Pour plus: data/prostate_raw_data/prostate_preprocess.py
+
+ÉTAPE 3: GÉNÉRATION DES SPLITS
+───────────────────────────────
+Commande (80-20 split):
+  python data/prostate_raw_data/create_prostate_splits.py \
+     --input_dir ./data/prostate_data/preprocessed \
+     --output_dir ./data/prostate_data
+
+Ou (5-fold cross-validation):
+  python data/prostate_raw_data/create_prostate_splits.py \
+     --input_dir ./data/prostate_data/preprocessed \
+     --output_dir ./data/prostate_data \
+     --kfold 5
+
+Output:
+  data/prostate_data/
+  ├── train.csv         # 80% des patients
+  └── validation.csv    # 20% des patients
+  
+  Format CSV:
+  data_path,case_name
+  ./data/prostate_data/preprocessed/patient_001,patient_001
+  ...
+
+Code: data/prostate_raw_data/create_prostate_splits.py
+📖 Pour plus: GUIDE_PROSTATE_COMPLETE_FR.md → Section "Génération des splits"
+
+ÉTAPE 4: ENTRAÎNEMENT
+─────────────────────
+Commande (Single GPU):
+  python train_scripts/trainer_ddp.py \
+     --config experiments/prostate_seg/config_prostate.yaml
+
+Commande (Multi-GPU):
+  CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch \
+     --nproc_per_node=2 \
+     train_scripts/trainer_ddp.py \
+     --config experiments/prostate_seg/config_prostate.yaml
+
+Configuration:
+  • Fichier: experiments/prostate_seg/config_prostate.yaml
+  • Modifiez les hyperparamètres selon vos données
+  • Checkpoints sauvegardés: experiments/prostate_seg/checkpoints/
+
+Monitoring:
+  • Logs: experiments/prostate_seg/logs/
+  • Optionnel: Intégration Wandb (modifier config)
+
+Code: architectures/segformer3d.py (architecture)
+📖 Pour plus: GUIDE_PROSTATE_COMPLETE_FR.md → Section "Entraînement"
+
+ÉTAPE 5: INFÉRENCE (PRÉDICTION)
+────────────────────────────────
+Commande:
+  python experiments/prostate_seg/inference_prostate.py \
+     --model_path ./experiments/prostate_seg/checkpoints/best.pt \
+     --input_dir ./test_data/raw \
+     --output_dir ./test_predictions \
+     --save_nifti true
+
+Processus:
+  1. Charge checkpoint entraîné
+  2. Charge données nii.gz (T2, ADC)
+  3. Resample à 96×96×96
+  4. Inférence (simple ou sliding window)
+  5. Post-traitement (seuil, morphologie)
+  6. Sauvegarde en nii.gz
+
+Input:
+  test_data/raw/patient_XXX/{T2,ADC}.nii.gz
+
+Output:
+  test_predictions/patient_XXX/segmentation_pred.nii.gz
+
+Code: experiments/prostate_seg/inference_prostate.py → ProstateInferencer
+📖 Pour plus: GUIDE_PROSTATE_COMPLETE_FR.md → Section "Inférence"
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 DÉMARRAGE RAPIDE
+═════════════════════
+
+OPTION 1: Utiliser le script bash (Recommandé)
+───────────────────────────────────────────────
+  chmod +x quick_start_prostate.sh
+  ./quick_start_prostate.sh /chemin/vers/prostate_raw_data
+
+Le script va:
+  1. Détecter les patients
+  2. Lancer le prétraitement
+  3. Générer les splits
+  4. Proposer entraînement
+  5. Proposer inférence
+
+OPTION 2: Manuel (Contrôle complet)
+────────────────────────────────────
+  # 1. Prétraitement
+  python data/prostate_raw_data/prostate_preprocess.py \
+     --input_dir ./data/prostate_raw_data \
+     --output_dir ./data/prostate_data/preprocessed
+
+  # 2. Splits
+  python data/prostate_raw_data/create_prostate_splits.py \
+     --input_dir ./data/prostate_data/preprocessed \
+     --output_dir ./data/prostate_data
+
+  # 3. Entraînement
+  python train_scripts/trainer_ddp.py \
+     --config experiments/prostate_seg/config_prostate.yaml
+
+  # 4. Inférence
+  python experiments/prostate_seg/inference_prostate.py \
+     --model_path ./experiments/prostate_seg/checkpoints/best.pt \
+     --input_dir ./test_data/raw \
+     --output_dir ./test_predictions
+
+═══════════════════════════════════════════════════════════════════════════════
+
+❓ FAQ & DÉPANNAGE
+═════════════════
+
+Q: Quelle est la différence avec BraTS?
+R: → Consultez ADAPTATION_PROSTATE_README.txt → Section "Différences par rapport à BraTS"
+
+Q: Comment modifier la configuration?
+R: → Éditez experiments/prostate_seg/config_prostate.yaml
+   → Consultez GUIDE_PROSTATE_COMPLETE_FR.md → Section "Configuration avancée"
+
+Q: J'ai une erreur "CUDA out of memory"
+R: → Réduisez batch_size dans config_prostate.yaml
+   → Consultez GUIDE_PROSTATE_COMPLETE_FR.md → Section "Dépannage"
+
+Q: Comment adapter pour plus de modalités?
+R: → Utilisez ProstateSegDatasetMultiModal au lieu de ProstateSegDataset
+   → Modifiez in_channels dans config_prostate.yaml
+   → Consultez dataloaders/prostate_seg.py
+
+Q: Quels paramètres d'inférence utiliser?
+R: → Les paramètres par défaut conviennent généralement
+   → Ajustez --threshold selon vos besoins
+   → Consultez GUIDE_PROSTATE_COMPLETE_FR.md → Section "Inférence"
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✨ POINTS CLÉS À RETENIR
+═════════════════════════
+
+1. FORMAT DONNÉES
+   • Entrée: nii.gz (NIfTI)
+   • Intermédiaire: PyTorch .pt (après preprocessing)
+   • Format réseau: Flexible (in_channels=2, num_classes=2)
+
+2. PIPELINE
+   raw nii.gz → preprocess → .pt → dataloader → train → checkpoint → inférence → pred nii.gz
+
+3. ARCHITECTURE
+   • SegFormer3D (Vision Transformer 3D)
+   • Entrées: 2 modalités (T2, ADC)
+   • Sorties: 2 classes (fond, prostate)
+   • Taille: 96×96×96
+
+4. DÉPENDANCES
+   • nibabel (nii.gz I/O)
+   • scipy, scikit-image (image processing)
+   • torch, monai (deep learning)
+
+5. DÉPANNAGE
+   • Consultez GUIDE_PROSTATE_COMPLETE_FR.md
+   • Vérifiez les formats d'entrée
+   • Testez sur petit subset avant grand entraînement
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🚀 PROCHAINES ÉTAPES
+═════════════════════
+
+1. □ Lisez ADAPTATION_PROSTATE_README.txt (15 min)
+2. □ Organisez données en data/prostate_raw_data/patient_XXX
+3. □ Exécutez prostate_preprocess.py (30 min - 2h selon données)
+4. □ Exécutez create_prostate_splits.py (< 1 min)
+5. □ Modifiez experiments/prostate_seg/config_prostate.yaml selon besoin
+6. □ Lancez entraînement (dépend du nombre de patients et GPU)
+7. □ Évaluez sur validation set
+8. □ Inférence sur test set avec inference_prostate.py
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📞 SUPPORT & RESSOURCES
+═══════════════════════
+
+Documentation:
+  • GUIDE_PROSTATE_COMPLETE_FR.md    → Guide complet étape par étape
+  • ADAPTATION_PROSTATE_README.txt   → Vue d'ensemble rapide
+  • FICHIERS_PROSTATE_RESUME.txt     → Référence technique complète
+
+Code Source:
+  • dataloaders/prostate_seg.py              → Dataloader
+  • data/prostate_raw_data/prostate_preprocess.py    → Preprocessing
+  • experiments/prostate_seg/inference_prostate.py   → Inference
+  • experiments/prostate_seg/config_prostate.yaml    → Configuration
+
+Ressources externes:
+  • MONAI docs: https://docs.monai.io
+  • NIfTI format: https://nifti.nimh.nih.gov
+  • Vision Transformers: https://arxiv.org/abs/2010.11929
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ VOUS ÊTES PRÊT!
+
+Commencez par lire ADAPTATION_PROSTATE_README.txt, puis suivez le workflow
+complet. Tous les fichiers sont prêts à l'emploi avec documentation complète
+en français.
+
+Bon entraînement! 🚀
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Dernière mise à jour: 2025-01-01
+Version: 1.0
