@@ -3,30 +3,80 @@ Script pour générer les fichiers train.csv et validation.csv pour données de 
 
 Après exécution de prostate_preprocess.py, utilisez ce script pour:
 1. Scanner les répertoires prétraités
-2. Générer les fichiers train.csv et validation.csv
+2. Générer les fichiers train.csv et validation.csv (avec stratification par classe)
 3. Optionnel: générer les fichiers CSV pour k-fold cross-validation
 
 Utilisation:
-    # Train/Val simple (80-20 split)
+    # Train/Val simple (80-20 split avec stratification par classe)
     python create_prostate_splits.py \\
         --input_dir ./data/prostate_preprocessed \\
         --output_dir ./data/prostate_data \\
-        --test_size 0.2
+        --test_size 0.2 \\
+        --stratified true
 
-    # Avec cross-validation (5-fold)
+    # Avec cross-validation (5-fold avec stratification)
     python create_prostate_splits.py \\
         --input_dir ./data/prostate_preprocessed \\
         --output_dir ./data/prostate_data \\
-        --kfold 5
+        --kfold 5 \\
+        --stratified true
+
+    # Sans stratification (simple random split)
+    python create_prostate_splits.py \\
+        --input_dir ./data/prostate_preprocessed \\
+        --output_dir ./data/prostate_data \\
+        --test_size 0.2 \\
+        --stratified false
 """
 
 import os
 import argparse
 import pandas as pd
 import numpy as np
+import torch
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import warnings
+
+
+def get_case_classes(case_name: str, preprocessed_dir: str, num_classes: int = 3) -> int:
+    """
+    Détermine la classe dominante pour un cas (utilisé pour stratification).
+    
+    Stratégie: Classe avec le plus de voxels (sauf 0=fond).
+    
+    Args:
+        case_name: Nom du patient
+        preprocessed_dir: Répertoire contenant les données
+        num_classes: Nombre total de classes
+    
+    Returns:
+        Classe dominante (1 à num_classes-1), ou 0 si fond seul
+    """
+    label_path = os.path.join(preprocessed_dir, case_name, f"{case_name}_label.pt")
+    
+    try:
+        label = torch.load(label_path)
+        
+        # Compte les voxels par classe
+        class_counts = []
+        for c in range(num_classes):
+            count = (label == c).sum().item()
+            class_counts.append(count)
+        
+        # Trouve la classe dominante (sauf 0=fond)
+        # Classe dominante = classe avec plus de voxels parmi les classes non-fond
+        non_bg_classes = [(c, count) for c, count in enumerate(class_counts) if c > 0]
+        
+        if non_bg_classes:
+            dominant_class = max(non_bg_classes, key=lambda x: x[1])[0]
+            return dominant_class
+        else:
+            return 0  # Fond seul
+    
+    except Exception as e:
+        print(f"⚠️  Erreur lors de la lecture {label_path}: {e}")
+        return 0
 
 
 def get_case_names(preprocessed_dir: str) -> List[str]:
@@ -58,28 +108,60 @@ def train_val_split(
     cases: List[str],
     test_size: float = 0.2,
     random_state: int = 42,
-    preprocessed_dir: str = None
+    preprocessed_dir: str = None,
+    stratified: bool = True,
+    num_classes: int = 3
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Crée une split train/val simple.
+    Crée une split train/val simple (avec stratification optionnelle).
     
     Args:
         cases: Liste des noms de patients
         test_size: Proportion pour validation (défaut: 0.2 = 80-20)
         random_state: Seed pour reproductibilité
         preprocessed_dir: Répertoire des données (pour data_path)
+        stratified: Si True, stratifie par classe dominante
+        num_classes: Nombre de classes pour stratification
     
     Returns:
         (train_df, val_df)
     """
     np.random.seed(random_state)
     
-    # Mélange et sépare
-    shuffled = np.random.permutation(cases)
-    split_idx = int(len(cases) * (1 - test_size))
-    
-    train_cases = shuffled[:split_idx]
-    val_cases = shuffled[split_idx:]
+    if stratified:
+        # Stratification par classe
+        class_indices = {}
+        for c in range(num_classes):
+            class_indices[c] = []
+        
+        for case in cases:
+            dominant_class = get_case_classes(case, preprocessed_dir, num_classes)
+            class_indices[dominant_class].append(case)
+        
+        train_cases = []
+        val_cases = []
+        
+        # Pour chaque classe, split avec proportions
+        for c in range(num_classes):
+            class_cases = class_indices[c]
+            if len(class_cases) == 0:
+                continue
+            
+            shuffled = np.random.permutation(class_cases)
+            split_idx = max(1, int(len(class_cases) * (1 - test_size)))
+            
+            train_cases.extend(shuffled[:split_idx])
+            val_cases.extend(shuffled[split_idx:])
+        
+        train_cases = np.array(train_cases)
+        val_cases = np.array(val_cases)
+    else:
+        # Split simple sans stratification
+        shuffled = np.random.permutation(cases)
+        split_idx = int(len(cases) * (1 - test_size))
+        
+        train_cases = shuffled[:split_idx]
+        val_cases = shuffled[split_idx:]
     
     # Crée les DataFrames
     def create_df(case_list, base_path):
@@ -101,32 +183,70 @@ def kfold_split(
     cases: List[str],
     k: int = 5,
     random_state: int = 42,
-    preprocessed_dir: str = None
+    preprocessed_dir: str = None,
+    stratified: bool = True,
+    num_classes: int = 3
 ) -> Tuple[dict, dict]:
     """
-    Crée des splits k-fold pour cross-validation.
+    Crée des splits k-fold pour cross-validation (avec stratification optionnelle).
     
     Args:
         cases: Liste des noms de patients
         k: Nombre de folds (défaut: 5)
         random_state: Seed pour reproductibilité
         preprocessed_dir: Répertoire des données
+        stratified: Si True, stratifie par classe dominante dans chaque fold
+        num_classes: Nombre de classes pour stratification
     
     Returns:
-        (train_dfs_dict, val_dfs_dict) - Chacun contient 5 DataFrames
+        (train_dfs_dict, val_dfs_dict) - Chacun contient k DataFrames
     """
     np.random.seed(random_state)
     
-    # Mélange les cas
-    shuffled = np.random.permutation(cases)
-    
-    # Divise en k parties
-    fold_size = len(shuffled) // k
-    folds = []
-    for i in range(k):
-        start = i * fold_size
-        end = start + fold_size if i < k - 1 else len(shuffled)
-        folds.append(shuffled[start:end])
+    if stratified:
+        # Stratification par classe
+        class_indices = {}
+        for c in range(num_classes):
+            class_indices[c] = []
+        
+        for case in cases:
+            dominant_class = get_case_classes(case, preprocessed_dir, num_classes)
+            class_indices[dominant_class].append(case)
+        
+        # Pour chaque classe, divise en k folds
+        class_folds = {}
+        for c in range(num_classes):
+            class_cases = class_indices[c]
+            if len(class_cases) == 0:
+                class_folds[c] = [[] for _ in range(k)]
+                continue
+            
+            shuffled = np.random.permutation(class_cases)
+            fold_size = len(shuffled) // k
+            
+            folds = []
+            for i in range(k):
+                start = i * fold_size
+                end = start + fold_size if i < k - 1 else len(shuffled)
+                folds.append(list(shuffled[start:end]))
+            
+            class_folds[c] = folds
+        
+        # Combine les folds de toutes les classes
+        folds = [[] for _ in range(k)]
+        for c in range(num_classes):
+            for fold_idx in range(k):
+                folds[fold_idx].extend(class_folds[c][fold_idx])
+    else:
+        # Split simple sans stratification
+        shuffled = np.random.permutation(cases)
+        fold_size = len(shuffled) // k
+        
+        folds = []
+        for i in range(k):
+            start = i * fold_size
+            end = start + fold_size if i < k - 1 else len(shuffled)
+            folds.append(list(shuffled[start:end]))
     
     def create_df(case_list, base_path):
         data = []
@@ -185,6 +305,18 @@ def main():
         default=42,
         help="Seed pour reproductibilité (défaut: 42)"
     )
+    parser.add_argument(
+        "--stratified",
+        type=lambda x: x.lower() in ('true', '1', 'yes'),
+        default=True,
+        help="Si True, stratifie par classe dominante (défaut: True)"
+    )
+    parser.add_argument(
+        "--num_classes",
+        type=int,
+        default=3,
+        help="Nombre de classes pour stratification (défaut: 3)"
+    )
     
     args = parser.parse_args()
     
@@ -201,7 +333,9 @@ def main():
     
     print(f"\n📊 Génération des splits pour {len(cases)} patients")
     print(f"   Répertoire source: {args.input_dir}")
-    print(f"   Répertoire de sortie: {args.output_dir}\n")
+    print(f"   Répertoire de sortie: {args.output_dir}")
+    print(f"   Stratification: {'Activée (par classe dominante)' if args.stratified else 'Désactivée'}")
+    print(f"   Nombre de classes: {args.num_classes}\n")
     
     if args.kfold:
         # K-fold cross-validation
@@ -211,7 +345,9 @@ def main():
             cases,
             k=args.kfold,
             random_state=args.random_state,
-            preprocessed_dir=args.input_dir
+            preprocessed_dir=args.input_dir,
+            stratified=args.stratified,
+            num_classes=args.num_classes
         )
         
         # Sauvegarde les fichiers CSV
@@ -237,7 +373,9 @@ def main():
             cases,
             test_size=args.test_size,
             random_state=args.random_state,
-            preprocessed_dir=args.input_dir
+            preprocessed_dir=args.input_dir,
+            stratified=args.stratified,
+            num_classes=args.num_classes
         )
         
         train_file = os.path.join(args.output_dir, "train.csv")

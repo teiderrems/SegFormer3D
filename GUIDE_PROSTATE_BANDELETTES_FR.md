@@ -5,7 +5,7 @@
 Ce guide explique comment utiliser SegFormer3D pour segmenter **prostate ET bandelettes** à partir de fichiers NII.GZ.
 
 ### Architecture adaptée
-- **Entrée**: 2 modalités (T2, ADC)
+- **Entrée**: 1 modalité (T2 seulement)
 - **Sortie**: 3 classes
   - Classe 0: Fond (non-segmenté)
   - Classe 1: Prostate
@@ -13,22 +13,20 @@ Ce guide explique comment utiliser SegFormer3D pour segmenter **prostate ET band
 
 ## 📁 Structure des données d'entrée
 
-Vos données doivent être organisées avec les deux classes dans un **seul fichier NII.GZ**:
+Vos données doivent être organisées avec T2 et segmentation:
 
 ```
 data/prostate_raw_data/
 ├── patient_001/
-│   ├── T2.nii.gz                    # IRM T2
-│   ├── ADC.nii.gz                   # IRM ADC
+│   ├── T2.nii.gz                    # IRM T2 (SEULE modalité)
 │   └── segmentation.nii.gz          # Multi-label: 0=fond, 1=prostate, 2=bandelettes
 ├── patient_002/
 │   ├── T2.nii.gz
-│   ├── ADC.nii.gz
 │   └── segmentation.nii.gz
 └── ...
 ```
 
-**Important**: Le fichier `segmentation.nii.gz` doit contenir:
+**Important**: Vous avez seulement **T2** (pas d'ADC)
 - **0** = Fond (voxels non-segmentés)
 - **1** = Prostate
 - **2** = Bandelettes

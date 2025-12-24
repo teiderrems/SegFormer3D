@@ -18,8 +18,8 @@ def build_architecture(config):
     
     Args:
         config (dict): Dictionnaire de configuration contenant au minimum:
-            - config["model_name"]: Nom du modèle (ex: "segformer3d")
-            - config["model_parameters"]: Paramètres du modèle
+            - config["model"]["name"]: Nom du modèle (ex: "segformer3d")
+            - config["model"]: Paramètres du modèle
     
     Returns:
         torch.nn.Module: Instance du modèle configuré
@@ -28,16 +28,19 @@ def build_architecture(config):
         ValueError: Si le model_name n'est pas supporté
     
     Exemple:
-        >>> config = {"model_name": "segformer3d", "model_parameters": {...}}
+        >>> config = {"model": {"name": "segformer3d", ...}}
         >>> model = build_architecture(config)
     """
-    if config["model_name"] == "segformer3d":
+    # Support both old and new config formats
+    model_name = config.get("model", {}).get("name") or config.get("model_name")
+    
+    if model_name == "segformer3d":
         from .segformer3d import build_segformer3d_model
 
         model = build_segformer3d_model(config)
 
         return model
     else:
-        return ValueError(
+        raise ValueError(
             "specified model not supported, edit build_architecture.py file"
         )

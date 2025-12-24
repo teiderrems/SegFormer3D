@@ -65,21 +65,63 @@ def build_segformer3d_model(config=None):
         >>> config = load_config("config.yaml")
         >>> model = build_segformer3d_model(config)
     """
+    # Support both old and new config formats
+    model_config = config.get("model", config.get("model_parameters", {}))
+    
+    # Get parameters with defaults
+    in_channels = model_config.get("in_channels", 1)
+    num_classes = model_config.get("num_classes", 2)
+    
+    # Use provided parameters or defaults
+    sr_ratios = model_config.get("sr_ratios", [8, 4, 2, 1])
+    embed_dims = model_config.get("embed_dims", [64, 128, 256, 512])
+    
+    # Ensure patch_kernel_size is a list
+    patch_kernel_size = model_config.get("patch_kernel_size", [3, 3, 3, 3])
+    if isinstance(patch_kernel_size, int):
+        patch_kernel_size = [patch_kernel_size] * 4
+    
+    # Ensure patch_stride is a list
+    patch_stride = model_config.get("patch_stride", [2, 2, 2, 2])
+    if isinstance(patch_stride, int):
+        patch_stride = [patch_stride] * 4
+    
+    # Ensure patch_padding is a list
+    patch_padding = model_config.get("patch_padding", [1, 1, 1, 1])
+    if isinstance(patch_padding, int):
+        patch_padding = [patch_padding] * 4
+    
+    # Ensure mlp_ratios is a list
+    mlp_ratios = model_config.get("mlp_ratios", [4, 4, 4, 4])
+    if isinstance(mlp_ratios, int):
+        mlp_ratios = [mlp_ratios] * 4
+    
+    # Ensure num_heads is a list
+    num_heads = model_config.get("num_heads", [4, 4, 4, 4])
+    if isinstance(num_heads, int):
+        num_heads = [num_heads] * 4
+    
+    # Ensure depths is a list
+    depths = model_config.get("depths", [3, 4, 6, 3])
+    if isinstance(depths, int):
+        depths = [depths] * 4
+    
+    decoder_head_embedding_dim = model_config.get("decoder_head_embedding_dim", 256)
+    decoder_dropout = model_config.get("decoder_dropout", 0.1)
+    
     model=SegFormer3D(
-        in_channels=config["model_parameters"]["in_channels"],
-        sr_ratios=config["model_parameters"]["sr_ratios"],
-        embed_dims=config["model_parameters"]["embed_dims"],
-        patch_kernel_size=config["model_parameters"]["patch_kernel_size"],
-        patch_stride=config["model_parameters"]["patch_stride"],
-        patch_padding=config["model_parameters"]["patch_padding"],
-        mlp_ratios=config["model_parameters"]["mlp_ratios"],
-        num_heads=config["model_parameters"]["num_heads"],
-        depths=config["model_parameters"]["depths"],
-        decoder_head_embedding_dim=config["model_parameters"][
-            "decoder_head_embedding_dim"
-        ],
-        num_classes=config["model_parameters"]["num_classes"],
-        decoder_dropout=config["model_parameters"]["decoder_dropout"],
+        in_channels=in_channels,
+        sr_ratios=sr_ratios,
+        embed_dims=embed_dims,
+        patch_kernel_size=patch_kernel_size,
+        patch_stride=patch_stride,
+        patch_padding=patch_padding,
+        mlp_ratios=mlp_ratios,
+        num_heads=num_heads,
+        depths=depths,
+        decoder_head_embedding_dim=decoder_head_embedding_dim,
+        num_classes=num_classes,
+        decoder_dropout=decoder_dropout,
     )
     return model
 

@@ -263,15 +263,12 @@ class ProstatePreprocessor:
             t2_path = os.path.join(case_dir, "T2.nii.gz")
             adc_path = os.path.join(case_dir, "ADC.nii.gz")
             
-            # Vérifie l'existence des fichiers T2, ADC
+            # Vérifie l'existence du fichier T2
             if not os.path.exists(t2_path):
                 raise FileNotFoundError(f"T2.nii.gz manquant dans {case_dir}")
-            if not os.path.exists(adc_path):
-                raise FileNotFoundError(f"ADC.nii.gz manquant dans {case_dir}")
             
-            # Charge les données T2, ADC
+            # Charge les données T2 (pas d'ADC)
             t2 = self.load_nifti(t2_path)
-            adc = self.load_nifti(adc_path)
             
             # Charge la segmentation (multi-label ou fichiers séparés)
             seg = self._load_segmentation(case_dir, case_name)
@@ -279,7 +276,6 @@ class ProstatePreprocessor:
             # Resample à la taille cible
             target = (self.target_size, self.target_size, self.target_size)
             t2_resampled = self.resample_volume(t2, target, order=1)
-            adc_resampled = self.resample_volume(adc, target, order=1)
             seg_resampled = self.resample_volume(seg, target, order=0)
             
             # Préserve les labels multi-classe (0, 1, 2)
@@ -291,10 +287,9 @@ class ProstatePreprocessor:
             
             # Normalise les intensités
             t2_norm = self.normalize_intensity(t2_resampled, mask, method=self.normalize_method)
-            adc_norm = self.normalize_intensity(adc_resampled, mask, method=self.normalize_method)
             
-            # Empile les modalités: (2, D, H, W)
-            modalities = np.stack([t2_norm, adc_norm], axis=0)
+            # Stack T2 seul: (1, D, H, W)
+            modalities = t2_norm[np.newaxis, :, :, :]
             label = seg_labels[np.newaxis, :, :, :]  # (1, D, H, W) avec labels 0, 1, 2
             
             # Convertit en tenseurs PyTorch
@@ -324,7 +319,6 @@ class ProstatePreprocessor:
                 "input_shape": t2.shape,
                 "output_shape": tuple(modalities_tensor.shape),
                 "t2_range": (float(t2_norm.min()), float(t2_norm.max())),
-                "adc_range": (float(adc_norm.min()), float(adc_norm.max())),
                 "prostate_voxels": prostate_count,
                 "bandelettes_voxels": bandelettes_count,
                 "total_voxels": int(np.prod(seg_labels.shape)),

@@ -1,12 +1,19 @@
 import os
+import sys
 import torch
 import evaluate
+import yaml
+import argparse
 from tqdm import tqdm
 from typing import Dict
 from copy import deepcopy
 from termcolor import colored
 from torch.utils.data import DataLoader
 import monai
+
+# Add parent directory to path for local imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from metrics.segmentation_metrics import SlidingWindowInference
 import kornia
 
@@ -52,8 +59,11 @@ class Segmentation_Trainer:
         # accelerate object
         self.accelerator = accelerator
 
-        # get wandb object
-        self.wandb_tracker = accelerator.get_tracker("wandb")
+        # get wandb object (optional, with error handling)
+        try:
+            self.wandb_tracker = accelerator.get_tracker("wandb")
+        except:
+            self.wandb_tracker = None
 
         # metrics
         self.current_epoch = 0  # current epoch
@@ -258,9 +268,13 @@ class Segmentation_Trainer:
         """Run full training and validation loop with memory optimization."""
         # Tell wandb to watch the model and optimizer values
         if self.accelerator.is_main_process:
-            self.wandb_tracker.run.watch(
-                self.model, self.criterion, log="all", log_freq=10, log_graph=True
-            )
+            try:
+                if hasattr(self.wandb_tracker, 'run'):
+                    self.wandb_tracker.run.watch(
+                        self.model, self.criterion, log="all", log_freq=10, log_graph=True
+                    )
+            except Exception as e:
+                self.accelerator.print(f"[warning] -- could not watch model on wandb: {e}")
 
         # Run Training and Validation
         for epoch in tqdm(range(self.num_epochs)):
@@ -343,8 +357,12 @@ class Segmentation_Trainer:
             "val_loss": self.epoch_val_loss,
             "mean_dice": self.epoch_val_dice,
         }
-        # log the data
-        self.accelerator.log(log_data)
+        # log the data (only if tracker is available)
+        try:
+            if self.wandb_tracker is not None:
+                self.accelerator.log(log_data)
+        except Exception as e:
+            pass  # Logging not critical
 
     def _save_and_print(self) -> None:
         """_summary_"""
@@ -834,16 +852,16 @@ class AutoEncoder_Trainer:
         """
         # update batch norm stats for ema model after training
         # TODO: test ema functionality
-        print(colored(f"[info] -- updating ema batch norm stats", color="red"))
+        self.accelerator.print(colored(f"[info] -- updating ema batch norm stats", color="red"))
         if duplicate_model:
-            temp_ema_model = deepcopy(self.ema_model).to(self.gpu_id)  # make temp copy
+            temp_ema_model = deepcopy(self.ema_model).to(self.accelerator.device)  # make temp copy
             torch.optim.swa_utils.update_bn(
-                self.train_dataloader, temp_ema_model, device=self.gpu_id
+                self.train_dataloader, temp_ema_model, device=self.accelerator.device
             )
             return temp_ema_model
         else:
             torch.optim.swa_utils.update_bn(
-                self.train_dataloader, self.ema_model, device=self.gpu_id
+                self.train_dataloader, self.ema_model, device=self.accelerator.device
             )
             return None
 
@@ -856,3 +874,142 @@ class AutoEncoder_Trainer:
 
     def evaluate(self) -> None:
         pass
+
+#################################################################################################
+def main():
+    """Main function to run training with configuration file."""
+    print("[DEBUG] main() called", flush=True)
+    import argparse
+    import yaml
+    from accelerate import Accelerator
+    from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
+    
+    # Parse arguments
+    print("[DEBUG] Parsing arguments", flush=True)
+    parser = argparse.ArgumentParser(description="Train SegFormer3D model")
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to config YAML file"
+    )
+    parser.add_argument(
+        "--local_rank",
+        type=int,
+        default=-1,
+        help="Local rank for distributed training"
+    )
+    args = parser.parse_args()
+    
+    # Load config
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    if config is None:
+        raise ValueError(f"Config file {args.config} is empty or invalid")
+    
+    # Initialize accelerator
+    accelerator = Accelerator(
+        gradient_accumulation_steps=config.get("training_parameters", {}).get("gradient_accumulation_steps", 1),
+        mixed_precision=config.get("training_parameters", {}).get("mixed_precision", "no"),
+        log_with=None,  # Disable logging by default - no init_trackers
+    )
+    
+    # WandB disabled - skip init_trackers to avoid blocking
+    # Trainers will check for wandb_tracker = None
+    
+    # Build model
+    from architectures.build_architecture import build_architecture
+    model = build_architecture(config)
+    accelerator.print(f"[info] -- model built successfully")
+    
+    # Build datasets and dataloaders
+    from dataloaders.build_dataset import build_dataloaders
+    train_dataloader, val_dataloader = build_dataloaders(config)
+    accelerator.print(f"[info] -- dataloaders built successfully")
+    
+    # Build optimizer
+    from optimizers.optimizers import build_optimizer
+    optimizer = build_optimizer(model, config)
+    accelerator.print(f"[info] -- optimizer built successfully")
+    
+    # Build criterion
+    from losses.losses import build_loss
+    criterion = build_loss(config)
+    accelerator.print(f"[info] -- loss criterion built successfully")
+    
+    # Get training parameters from config (support both old and new formats)
+    training_cfg = config.get("training_parameters", config.get("training", {}))
+    
+    # Build schedulers
+    warmup_scheduler = None
+    training_scheduler = None
+    
+    num_epochs = training_cfg.get("num_epochs", config.get("training", {}).get("num_epochs", 100))
+    
+    warmup_cfg = config.get("warmup_scheduler", {})
+    if warmup_cfg.get("enabled", False):
+        warmup_epochs = warmup_cfg.get("warmup_epochs", config.get("training", {}).get("warmup_epochs", 10))
+        warmup_steps = warmup_epochs * len(train_dataloader)
+        warmup_scheduler = LinearLR(
+            optimizer,
+            start_factor=warmup_cfg.get("start_factor", 1e-3),
+            total_iters=warmup_steps
+        )
+    
+    training_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=num_epochs,
+        eta_min=training_cfg.get("min_lr", 1e-6)
+    )
+    
+    accelerator.print(f"[info] -- schedulers built successfully")
+    
+    # Prepare with accelerator
+    model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
+        model, optimizer, train_dataloader, val_dataloader
+    )
+    
+    accelerator.print(f"[info] -- model prepared for distributed training")
+    
+    # Determine trainer type
+    trainer_type = training_cfg.get("trainer_type", "segmentation")
+    
+    if trainer_type == "segmentation":
+        trainer = Segmentation_Trainer(
+            config=config,
+            model=model,
+            optimizer=optimizer,
+            criterion=criterion,
+            train_dataloader=train_dataloader,
+            val_dataloader=val_dataloader,
+            warmup_scheduler=warmup_scheduler,
+            training_scheduler=training_scheduler,
+            accelerator=accelerator,
+        )
+    elif trainer_type == "autoencoder":
+        trainer = AutoEncoder_Trainer(
+            config=config,
+            model=model,
+            optimizer=optimizer,
+            criterion=criterion,
+            train_dataloader=train_dataloader,
+            val_dataloader=val_dataloader,
+            warmup_scheduler=warmup_scheduler,
+            training_scheduler=training_scheduler,
+            accelerator=accelerator,
+        )
+    else:
+        raise ValueError(f"Unknown trainer type: {trainer_type}")
+    
+    print(f"[info] -- trainer initialized", flush=True)
+    print(f"\n[info] -- starting training for {num_epochs} epochs\n", flush=True)
+    
+    # Start training
+    trainer.train()
+    
+    print(f"\n[info] -- training completed successfully\n", flush=True)
+
+
+if __name__ == "__main__":
+    main()

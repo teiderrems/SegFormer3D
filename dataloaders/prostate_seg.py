@@ -25,6 +25,7 @@ import os
 import torch
 import pandas as pd
 from torch.utils.data import Dataset
+from torch.nn.functional import interpolate
 from typing import Optional, Dict, Any
 import warnings
 
@@ -57,6 +58,7 @@ class ProstateSegDataset(Dataset):
         is_train: bool = True,
         transform: Optional[Any] = None,
         split_file: Optional[str] = None,
+        target_size: int = 96,  # Redimensionner à 96x96x96
     ) -> None:
         """
         Initialise le dataset de prostate.
@@ -73,6 +75,8 @@ class ProstateSegDataset(Dataset):
             split_file (Optional[str]): Chemin personnalisé vers CSV au lieu du fichier par défaut.
                 Si None, utilise "train.csv" ou "validation.csv" basé sur is_train.
                 Defaults to None.
+            target_size (int): Taille cible pour le redimensionnement (ex: 96).
+                Defaults to 96.
         
         Raises:
             FileNotFoundError: Si le fichier CSV n'existe pas
@@ -81,7 +85,8 @@ class ProstateSegDataset(Dataset):
             >>> dataset = ProstateSegDataset(
             ...     root_dir="./prostate_data/preprocessed",
             ...     is_train=True,
-            ...     transform=transforms
+            ...     transform=transforms,
+            ...     target_size=96
             ... )
             >>> print(len(dataset))  # Nombre de patients
         """
@@ -105,8 +110,9 @@ class ProstateSegDataset(Dataset):
         self.csv = pd.read_csv(csv_fp)
         self.transform = transform
         self.is_train = is_train
+        self.target_size = target_size
         
-        print(f"✅ Chargé {len(self.csv)} patients depuis {csv_fp}")
+        print(f"✅ Chargé {len(self.csv)} patients depuis {csv_fp} (cible: {target_size}³)")
     
     def __len__(self) -> int:
         """Retourne le nombre de samples dans le dataset."""
@@ -137,6 +143,9 @@ class ProstateSegDataset(Dataset):
         data_path = self.csv["data_path"].iloc[idx]
         case_name = self.csv["case_name"].iloc[idx]
         
+        # Get target_size, with default
+        target_size = getattr(self, 'target_size', 96)
+        
         # Construit les chemins des fichiers .pt
         volume_fp = os.path.join(data_path, f"{case_name}_modalities.pt")
         label_fp = os.path.join(data_path, f"{case_name}_label.pt")
@@ -154,9 +163,31 @@ class ProstateSegDataset(Dataset):
                 label = torch.from_numpy(label)
             
             # Convertit en float32
+            volume = volume.float()
+            label = label.float()
+            
+            # Redimensionne si nécessaire
+            if volume.shape[-1] != self.target_size:
+                # Ajoute dimension batch pour interpolate
+                volume_resized = interpolate(
+                    volume.unsqueeze(0),
+                    size=(self.target_size, self.target_size, self.target_size),
+                    mode='trilinear',
+                    align_corners=False
+                ).squeeze(0)
+                
+                label_resized = interpolate(
+                    label.unsqueeze(0),
+                    size=(self.target_size, self.target_size, self.target_size),
+                    mode='nearest'
+                ).squeeze(0)
+                
+                volume = volume_resized
+                label = label_resized
+            
             data = {
-                "image": volume.float(),  # (num_modalités, D, H, W)
-                "label": label.float()    # (1, D, H, W)
+                "image": volume,  # (num_modalités, target_size, target_size, target_size)
+                "label": label    # (1, target_size, target_size, target_size)
             }
         
         except FileNotFoundError as e:

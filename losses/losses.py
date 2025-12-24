@@ -116,3 +116,39 @@ def build_loss_fn(loss_type: str, loss_args: Optional[Dict] = None) -> nn.Module
         )
     
     return loss_registry[loss_type]()
+
+def build_loss(config: Dict) -> nn.Module:
+    """Build loss function from config dictionary.
+    
+    Supports both old and new config formats:
+    - Old: loss section with type and args
+    - New: loss_fn section with loss_type and loss_args
+    
+    Args:
+        config (Dict): Configuration dictionary
+        
+    Returns:
+        Instantiated loss module
+    """
+    # Handle new format: loss_fn block
+    if "loss_fn" in config:
+        loss_config = config["loss_fn"]
+        loss_type = loss_config.get("loss_type", "dice").lower()
+        loss_args = loss_config.get("loss_args", {})
+    else:
+        # Handle old format: loss block
+        loss_config = config.get("loss", {})
+        loss_type = loss_config.get("type", "diceCE").lower()
+        loss_args = loss_config.get("args", {})
+    
+    # Normalize loss type names
+    loss_type_map = {
+        "dice": "dice",
+        "dicece": "diceCE",
+        "crossentropy": "crossentropy",
+        "binarycrossentropy": "binarycrossentropy",
+    }
+    
+    normalized_type = loss_type_map.get(loss_type.lower(), loss_type)
+    
+    return build_loss_fn(normalized_type, loss_args)

@@ -71,13 +71,13 @@ class ProstateInferencer:
         
         # Crée l'architecture (prostate + bandelettes: 2 in, 3 out)
         model = build_architecture(
-            name="segformer3d",
-            in_channels=2,
-            num_classes=3,  # 3 classes: fond, prostate, bandelettes
-            patch_size=8,
-            embed_dim=64,
-            num_layers=4,
-            num_heads=4
+            {"name":"segformer3d",
+            "in_channels":2,
+            "num_classes":2,  # 2 classes: fond, prostate
+            "patch_size":8,
+            "embed_dim":64,
+            "num_layers":4,
+            "num_heads":4}
         )
         
         # Charge les weights

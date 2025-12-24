@@ -30,17 +30,17 @@ def test_config():
     class_weights = config.get('loss', {}).get('class_weights', [])
     
     print(f"✅ num_classes: {num_classes}")
-    if num_classes == 3:
-        print("   ✅ Correct: 3 classes (0=fond, 1=prostate, 2=bandelettes)")
+    if num_classes == 2:
+        print("   ✅ Correct: 2 classes (0=fond, 1=prostate)")
     else:
-        print(f"   ❌ Erreur: attendu 3, trouvé {num_classes}")
+        print(f"   ❌ Erreur: attendu 2, trouvé {num_classes}")
         return False
     
     print(f"✅ class_weights: {class_weights}")
-    if len(class_weights) == 3:
-        print("   ✅ Correct: 3 poids (fond, prostate, bandelettes)")
+    if len(class_weights) == 2:
+        print("   ✅ Correct: 2 poids (fond, prostate)")
     else:
-        print(f"   ❌ Erreur: attendu 3 poids, trouvé {len(class_weights)}")
+        print(f"   ❌ Erreur: attendu 2 poids, trouvé {len(class_weights)}")
         return False
     
     return True
@@ -86,17 +86,17 @@ def test_model_architecture():
         print(f"❌ Import échoué: {e}")
         return False
     
-    # Crée un modèle avec 3 classes
+    # Crée un modèle avec 2 classes
     try:
-        model = SegFormer3D(in_channels=2, num_classes=3)
-        print(f"✅ SegFormer3D créé: in_channels=2, num_classes=3")
+        model = SegFormer3D(in_channels=1, num_classes=2)
+        print(f"✅ SegFormer3D créé: in_channels=1, num_classes=2")
         
         # Test forward pass
-        dummy_input = torch.randn(1, 2, 96, 96, 96)
+        dummy_input = torch.randn(1, 1, 96, 96, 96)
         with torch.no_grad():
             output = model(dummy_input)
         
-        expected_shape = (1, 3, 96, 96, 96)
+        expected_shape = (1, 2, 96, 96, 96)
         if output.shape == expected_shape:
             print(f"✅ Forward pass réussi: output shape {output.shape}")
         else:
@@ -126,7 +126,7 @@ def test_inference_classes():
         content = f.read()
     
     checks = [
-        ("num_classes=3", "Configuration 3 classes"),
+        ("num_classes=2", "Configuration 2 classes"),
         ("post_process_multiclass", "Méthode post-processing multi-classe"),
         ("threshold_bandelettes", "Support threshold séparé pour bandelettes"),
         ("save_separate_labels", "Support sauvegarde étiquettes séparées"),
@@ -162,7 +162,7 @@ def test_dataloader_compatibility():
     test_data_dir.mkdir(exist_ok=True)
     
     # Crée des fichiers de test
-    modalities = torch.randn(2, 96, 96, 96)
+    modalities = torch.randn(1, 96, 96, 96)
     labels = torch.zeros(1, 96, 96, 96)
     labels[0, 30:60, 30:60, 30:60] = 1  # Prostate
     labels[0, 40:50, 40:50, 40:50] = 2  # Bandelettes

@@ -21,9 +21,9 @@ Total: 5/5 tests réussis 🎉
 
 ### Entrée/Sortie
 ```
-Entrée:  T2.nii.gz (IRM T2)          ┐
-         ADC.nii.gz (IRM ADC)        ├→ SegFormer3D (2 inputs, 3 classes) → Sortie: 3 classes
-         segmentation.nii.gz (labels) ┘
+Entrée:  T2.nii.gz (IRM T2 seulement)   ┐
+         segmentation.nii.gz (labels)    ├→ SegFormer3D (1 input, 3 classes) → Sortie: 3 classes
+                                         ┘
 
 Taille:  96×96×96 (après resampling)
 ```
@@ -186,13 +186,13 @@ Label 2 = Bandelettes (implants chirurgicaux)
 from architectures.segformer3d import SegFormer3D
 
 model = SegFormer3D(
-    in_channels=2,      # T2 + ADC
+    in_channels=1,      # T2 only (no ADC)
     num_classes=3,      # fond, prostate, bandelettes
     depths=[2, 2, 2, 2],
     dims=[32, 64, 160, 256]
 )
 
-input_tensor = torch.randn(batch_size, 2, 96, 96, 96)
+input_tensor = torch.randn(batch_size, 1, 96, 96, 96)
 output = model(input_tensor)  # Shape: (batch_size, 3, 96, 96, 96)
 ```
 

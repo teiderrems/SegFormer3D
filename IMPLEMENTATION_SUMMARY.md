@@ -209,7 +209,7 @@ TEST 5: DataLoader Compatibility   ✅
 
 ### Architecture
 - ✅ Support 3 classes (fond, prostate, bandelettes)
-- ✅ Input: 2 modalités (T2, ADC)
+- ✅ Input: 1 modalité (T2 seulement, pas d'ADC)
 - ✅ Output: 3 channels (probabilités par classe)
 - ✅ Taille: 96×96×96
 - ✅ Bug fix: Type annotation `cube_root()`
