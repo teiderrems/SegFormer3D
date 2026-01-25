@@ -1,0 +1,92 @@
+# Configuration SegFormer3D pour segmentation prostate
+model:
+  name: segformer3d          # Nom de l'architecture du modèle
+  in_channels: 1                  # Nombre de canaux d'entrée (T2 seul)
+  num_classes: 2                  # Nombre de classes (Background, prostate)
+  embed_dims: [32, 64, 160, 256]  # Dimensions des embeddings par couche
+  sr_ratios: [8, 4, 2, 1]         # Ratios de réduction spatiale
+  patch_kernel_size: [7, 3, 3, 3] # Tailles des kernels de patch
+  patch_stride: [4, 2, 2, 2]      # Pas des convolutions
+  mlp_ratios: [4, 4, 4, 4]        # Ratios MLP
+  num_heads: [1, 2, 5, 8]         # Nombre de têtes d'attention
+  depths: [2, 2, 2, 2]            # Profondeur par couche
+  decoder_head_embedding_dim: 256 # Dimension du décodeur
+  decoder_dropout: 0.1            # Dropout du décodeur
+  input_size: [128, 128, 128]        # Dimensions d'entrée du modèle
+
+# Configuration de l'entraînement
+training_parameters:
+  batch_size: 2                   # Taille du batch d'entraînement
+  num_epochs: 3                 # Nombre total d'époques
+  print_every: 10                 # Fréquence d'impression des logs
+  cutoff_epoch: 100               # Époque de cutoff (non utilisé)
+  calculate_metrics: true         # Calculer les métriques
+  checkpoint_save_dir: ../checkpoints/SegFormer3D  # Répertoire de sauvegarde des checkpoints
+  learning_rate: 1e-4             # Taux d'apprentissage initial
+  weight_decay: 1e-5              # Coefficient de régularisation L2
+  warmup_epochs: 10               # Nombre d'époques de warmup pour le LR
+  device: cpu                    # Périphérique d'entraînement (cuda/cpu)
+
+# Configuration EMA (Exponential Moving Average)
+ema:
+  enabled: false                  # Activer EMA
+  val_ema_every: 10               # Fréquence de validation EMA
+
+# Configuration du scheduler de warmup
+warmup_scheduler:
+  enabled: true                   # Activer le warmup
+  warmup_epochs: 10               # Nombre d'époques de warmup
+
+# Configuration de l'inférence par fenêtre glissante
+sliding_window_inference:
+  roi: [128, 128, 128]               # Région d'intérêt pour l'inférence
+  sw_batch_size: 2                # Taille du batch pour l'inférence
+
+# Configuration des données
+dataset_parameters:
+  dataset_type: prostate_seg      # Type de dataset utilisé
+  train_dataset_args:
+    root: ../preprocessed_data_128_128_128   # Chemin vers les données d'entraînement
+    split_file: ../preprocessed_data_128_128_128/train.csv  # Fichier de split d'entraînement
+    train: true                   # Mode entraînement
+    target_size: 128               # Taille cible des volumes
+  val_dataset_args:
+    root: ../preprocessed_data_128_128_128      # Chemin vers les données de validation
+    split_file: ../preprocessed_data_128_128_128/validation.csv    # Fichier de split de validation
+    train: false                  # Mode validation
+    target_size: 128               # Taille cible des volumes
+
+# Configuration des dataloaders
+dataloader:
+  batch_size: 2                   # Taille du batch pour les dataloaders
+  shuffle: true                   # Mélanger les données à chaque époque
+  num_workers: 0                  # Nombre de workers pour le chargement (0 pour debug)
+  drop_last: true                 # Supprimer le dernier batch incomplet
+
+# Configuration de l'optimiseur
+optimizer:
+  type: adamw                     # Type d'optimiseur (adamw recommandé)
+  lr: 1e-4                        # Taux d'apprentissage
+  weight_decay: 1e-5              # Poids de la régularisation L2
+
+# Configuration du scheduler de taux d'apprentissage
+scheduler:
+  type: cosine                    # Type de scheduler (cosine annealing)
+  warmup_epochs: 10               # Époques de warmup
+
+# Configuration des pertes
+loss:
+  type: diceCE                   # Type de fonction de perte (dice + cross-entropy)
+  dice_weight: 1.0                # Poids de la perte dice
+  ce_weight: 1.0                  # Poids de la perte cross-entropy
+
+# Configuration des métriques d'évaluation
+metrics:
+  - dice                          # Dice coefficient
+  - iou                           # Intersection over Union
+
+# Configuration de sauvegarde des checkpoints
+checkpoint:
+  save_dir: ../checkpoints/SegFormer3D  # Répertoire de sauvegarde
+  save_freq: 10                  # Fréquence de sauvegarde (toutes les 10 époques)
+  keep_last: 5                   # Nombre de checkpoints à conserver

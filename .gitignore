@@ -1,0 +1,84 @@
+# Fichiers temporaires Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# directories
+
+visualizations/
+results/
+
+# Environnements virtuels
+.venv/
+venv/
+ENV/
+env/
+
+# Dossiers des données brutes et prétraitées
+data/raw_data/
+preprocessed_data/
+prostate_raw_data/
+prostate_preprocessed_data/
+preprocessed_data_*/
+visualizations/
+/*/visualizations_*/
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Système d'exploitation
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs et données temporaires
+*.log
+logs/
+*.tmp
+*.temp
+
+# Données et résultats (optionnel - décommentez si vous voulez ignorer)
+# preprocessed_data/
+# results/
+# visualizations/
+
+# Checkpoints de modèles (généralement volumineux)
+checkpoints/
+*.pth
+*.pt
+*.bin
+
+# Cache et données temporaires
+.cache/
+*.cache
+wandb/
+tensorboard/
+
+# Fichiers de configuration locaux
+.env
+.env.local
+config_local.yaml

@@ -1,0 +1,96 @@
+# Configuration de la pipeline automatisée de segmentation 3D
+# Ce fichier définit tous les paramètres configurables de la pipeline
+
+# === PARAMÈTRES DE PRÉTRAITEMENT ===
+preprocessing:
+  # Taille cible pour le resampling des volumes (en voxels)
+  # Valeurs recommandées: 64, 96, 128, 256
+  # Plus la taille est grande, plus la précision est élevée mais plus la mémoire GPU est nécessaire
+  target_size: 96
+
+  # Méthode de normalisation des intensités
+  # 'minmax': Normalisation min-max [0,1]
+  # 'zscore': Normalisation z-score (moyenne=0, écart-type=1)
+  normalize_method: "minmax"
+
+  # Sauter les patients déjà prétraités (évite le recalcul)
+  skip_existing: true
+
+# === PARAMÈTRES DES SPLITS D'ENTRAÎNEMENT ===
+splits:
+  # Type de split: 'fixed' pour train/val fixe, 'kfold' pour cross-validation
+  split_type: "fixed"
+
+  # Pour split_type='fixed': proportions train/validation/test
+  # Doivent sommer à 1.0
+  train_ratio: 0.8    # 80% pour entraînement
+  val_ratio: 0.2      # 20% pour validation
+  test_ratio: 0.0     # 0% pour test (utilise seulement train/val)
+
+  # Pour split_type='kfold': nombre de folds
+  k_folds: 5
+
+  # Seed pour reproductibilité
+  random_seed: 42
+
+  # Stratification par classe dominante (recommandé: true)
+  stratified: true
+
+# === PARAMÈTRES D'ENTRAÎNEMENT ===
+training:
+  # Nombre d'époques d'entraînement
+  num_epochs: 100
+
+  # Taille de batch (adapter selon la mémoire GPU disponible)
+  batch_size: 2
+
+  # Learning rate initial
+  learning_rate: 0.001
+
+  # Device: 'cuda' pour GPU, 'cpu' pour CPU
+  device: "cuda"
+
+# === ARCHITECTURES À UTILISER ===
+architectures:
+  # Liste des architectures à traiter
+  # Options: SegFormer3D
+  enabled: ["SegFormer3D"]
+
+# === CHEMINS DES RÉPERTOIRES ===
+paths:
+  # Répertoire des données brutes NIfTI
+  raw_data_dir: "./data/raw_prostate"
+
+  # Répertoire pour les données prétraitées
+  preprocessed_data_dir: "./data/preprocessed_data_128_128_128"
+
+  # Répertoire des configurations des modèles
+  config_dir: "./configs"
+
+  # Répertoire pour sauvegarder les checkpoints
+  checkpoint_dir: "./checkpoints"
+
+  # Répertoire pour les résultats d'inférence
+  results_dir: "./results"
+
+# === OPTIONS AVANCÉES ===
+advanced:
+  # Sauter l'étape de prétraitement si déjà fait
+  skip_preprocess: true
+
+  # Niveau de verbosité (0=minimal, 1=normal, 2=détaillé)
+  verbosity: 2
+
+# === PARAMÈTRES TRANSFORMER PAR DÉFAUT ===
+# Ces paramètres sont appliqués comme valeurs par défaut si une configuration
+# d'architecture spécifique ne les définit pas (ex: configs/config_segformer3d.yaml).
+transformer:
+  # Taille noyau pour l'embedding de patchs 3D. Peut être un int (appliqué à toutes
+  # les étapes) ou une liste de 4 entiers (un par étape pyramidale).
+  patch_kernel_size: [7, 3, 3, 3]
+
+  # Stride (pas) de la convolution d'embedding. Peut être un int ou une liste de 4 entiers.
+  patch_stride: [4, 2, 2, 2]
+
+  # Padding de la convolution d'embedding.
+  patch_padding: [3, 1, 1, 1]

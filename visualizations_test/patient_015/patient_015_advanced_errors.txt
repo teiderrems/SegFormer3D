@@ -1,0 +1,4 @@
+Advanced metrics summary
+Hausdorff (mean across classes): 88.66791979064357
+ASSD (mean across classes): 22.79676870174605
+class_1 - Hausdorff: {'hausdorff': 88.66791979064357, 'hd95': 69.63476143421474, 'dist_stats': {'mean': 41.141964610211076, 'median': 42.95346318982906, 'p95': 69.46221994724903}}, ASSD: {'assd': 22.79676870174605}

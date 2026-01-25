@@ -1,0 +1,36 @@
+# Configuration haute résolution pour pipeline de segmentation 3D
+# Optimisée pour des volumes de 128x128x128 voxels
+
+preprocessing:
+  target_size: 128         # Haute résolution pour meilleure précision
+  normalize_method: "zscore"  # Normalisation z-score pour haute résolution
+  skip_existing: true
+
+splits:
+  split_type: "kfold"      # Cross-validation pour évaluation robuste
+  train_ratio: 0.8
+  val_ratio: 0.2
+  test_ratio: 0.0
+  k_folds: 5
+  stratified: true
+  random_seed: 42
+
+training:
+  num_epochs: 150          # Plus d'époques pour convergence
+  batch_size: 1            # Batch size réduit pour haute résolution
+  learning_rate: 0.0005    # Learning rate ajusté
+  device: "cuda"
+
+architectures:
+  enabled: ["SegFormer3D"]  # Une seule architecture pour haute résolution
+
+paths:
+  raw_data_dir: "./data/raw_prostate"
+  preprocessed_data_dir: "./preprocessed_data_128"
+  config_dir: "./configs"
+  checkpoint_dir: "./checkpoints_128"
+  results_dir: "./results_128"
+
+advanced:
+  skip_preprocess: false
+  verbosity: 2
