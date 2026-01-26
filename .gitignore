@@ -34,7 +34,6 @@ env/
 # Dossiers des données brutes et prétraitées
 data/raw_data/
 preprocessed_data/
-prostate_raw_data/
 prostate_preprocessed_data/
 preprocessed_data_*/
 visualizations/
