@@ -9,12 +9,16 @@ import numpy as np
 import argparse
 import yaml
 from pathlib import Path
+import time
 
 # Ajouter le répertoire parent au path
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from architectures.build_architecture import build_architecture
+
+# Global verbosity level: 'quiet', 'normal', or 'debug' (set by CLI)
+VERBOSITY = 'normal'   # default
 
 def load_config(config_path):
     """Charge la configuration YAML"""
@@ -25,7 +29,11 @@ def load_model(checkpoint_path, config):
     """Charge le modèle depuis le checkpoint"""
     # Créer le modèle
     model = build_architecture(config)
-    print(f"Modèle créé: {config['model']['name']}")
+    if VERBOSITY != 'quiet':
+        print(f"Modèle créé: {config['model']['name']}")
+    if VERBOSITY == 'debug':
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"[debug] Model parameters: {total_params}")
 
     # Charger les poids
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
@@ -33,7 +41,8 @@ def load_model(checkpoint_path, config):
         model.load_state_dict(checkpoint['state_dict'])
     else:
         model.load_state_dict(checkpoint)
-    print(f"Checkpoint chargé depuis: {checkpoint_path}")
+    if VERBOSITY != 'quiet':
+        print(f"Checkpoint chargé depuis: {checkpoint_path}")
 
     model.eval()
     return model
@@ -97,45 +106,74 @@ def main():
     parser.add_argument("--checkpoint", required=True, help="Chemin vers le checkpoint")
     parser.add_argument("--input_dir", required=True, help="Répertoire des données d'entrée")
     parser.add_argument("--output_dir", default="inference_results", help="Répertoire de sortie")
+    parser.add_argument("--verbosity", choices=["quiet","normal","debug"], default="normal", help="Niveau de verbosité: quiet|normal|debug")
 
     args = parser.parse_args()
+
+    # Set global verbosity
+    global VERBOSITY
+    VERBOSITY = args.verbosity
 
     # Créer le répertoire de sortie
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Charger la configuration
     config = load_config(args.config)
-    print(f"Configuration chargée: {config['model']['name']}")
+    if VERBOSITY != 'quiet':
+        print(f"Configuration chargée: {config['model']['name']}")
 
     # Charger le modèle
     model = load_model(args.checkpoint, config)
 
     # Charger les données du patient
     modalities, labels = load_patient_data(args.input_dir)
-    print(f"Modalités chargées: shape={modalities.shape}")
-    if labels is not None:
-        print(f"Labels chargés: shape={labels.shape}")
+    if VERBOSITY != 'quiet':
+        print(f"Modalités chargées: shape={modalities.shape}")
+        if labels is not None:
+            print(f"Labels chargés: shape={labels.shape}")
+    if VERBOSITY == 'debug':
+        print(f"[debug] Modalités dtype={modalities.dtype}, min={modalities.min()}, max={modalities.max()}")
+        if labels is not None:
+            print(f"[debug] Labels unique: {np.unique(labels)}")
 
+    t0 = time.time()
     processed_volume = preprocess_volume(modalities, target_size=tuple(config['model']['input_size']))
-    print(f"Volume prétraité: shape={processed_volume.shape}")
+    preprocessing_time = time.time() - t0
+    if VERBOSITY != 'quiet':
+        print(f"Volume prétraité: shape={processed_volume.shape}")
+    if VERBOSITY == 'debug':
+        print(f"[debug] Preprocessing time: {preprocessing_time:.3f}s, processed shape={processed_volume.shape}, dtype={processed_volume.dtype}")
 
     # Faire la prédiction
+    t0 = time.time()
     prediction = predict_volume(model, processed_volume.unsqueeze(0))  # Ajouter batch dim
-    print(f"Prédiction faite: shape={prediction.shape}")
+    inference_time = time.time() - t0
+    if VERBOSITY != 'quiet':
+        print(f"Prédiction faite: shape={prediction.shape}")
+    if VERBOSITY == 'debug':
+        print(f"[debug] Inference time: {inference_time:.3f}s, prediction shape={prediction.shape}, unique={np.unique(prediction.numpy())}")
 
     # Sauvegarder la prédiction
     output_path = os.path.join(args.output_dir, f"prediction_{os.path.basename(args.input_dir)}.pt")
     torch.save(prediction, output_path)
-    print(f"Prédiction sauvegardée: {output_path}")
+    if VERBOSITY != 'quiet':
+        print(f"Prédiction sauvegardée: {output_path}")
+    if VERBOSITY == 'debug':
+        try:
+            size = os.path.getsize(output_path)
+            print(f"[debug] Saved prediction file size: {size} bytes")
+        except Exception:
+            pass
 
     # Statistiques
     unique, counts = np.unique(prediction.numpy(), return_counts=True)
-    print("\nStatistiques de prédiction:")
-    class_names = ['Background', 'Prostate', 'Bandelettes']
-    for i, (cls, count) in enumerate(zip(unique, counts)):
-        if i < len(class_names):
-            percentage = count / prediction.numel() * 100
-            print(f"{class_names[i]}: {percentage:.1f}%")
+    if VERBOSITY != 'quiet':
+        print("\nStatistiques de prédiction:")
+        class_names = ['Background', 'Prostate', 'Bandelettes']
+        for i, (cls, count) in enumerate(zip(unique, counts)):
+            if i < len(class_names):
+                percentage = count / prediction.numel() * 100
+                print(f"{class_names[i]}: {percentage:.1f}%")
 
 if __name__ == "__main__":
     main()

@@ -17,11 +17,11 @@ model:
 # Configuration de l'entraînement
 training_parameters:
   batch_size: 2                   # Taille du batch d'entraînement
-  num_epochs: 3                 # Nombre total d'époques
+  num_epochs: 10                 # Nombre total d'époques
   print_every: 10                 # Fréquence d'impression des logs
   cutoff_epoch: 100               # Époque de cutoff (non utilisé)
   calculate_metrics: true         # Calculer les métriques
-  checkpoint_save_dir: ../checkpoints/SegFormer3D  # Répertoire de sauvegarde des checkpoints
+  checkpoint_save_dir: ./checkpoints  # Répertoire de sauvegarde des checkpoints
   learning_rate: 1e-4             # Taux d'apprentissage initial
   weight_decay: 1e-5              # Coefficient de régularisation L2
   warmup_epochs: 10               # Nombre d'époques de warmup pour le LR
@@ -46,13 +46,13 @@ sliding_window_inference:
 dataset_parameters:
   dataset_type: prostate_seg      # Type de dataset utilisé
   train_dataset_args:
-    root: ../preprocessed_data_128_128_128   # Chemin vers les données d'entraînement
-    split_file: ../preprocessed_data_128_128_128/train.csv  # Fichier de split d'entraînement
+    root: ./data/preprocessed_data_128_128_128   # Chemin vers les données d'entraînement
+    split_file: ./data/preprocessed_data_128_128_128/train.csv  # Fichier de split d'entraînement
     train: true                   # Mode entraînement
     target_size: 128               # Taille cible des volumes
   val_dataset_args:
-    root: ../preprocessed_data_128_128_128      # Chemin vers les données de validation
-    split_file: ../preprocessed_data_128_128_128/validation.csv    # Fichier de split de validation
+    root: ./data/preprocessed_data_128_128_128      # Chemin vers les données de validation
+    split_file: ./data/preprocessed_data_128_128_128/validation.csv    # Fichier de split de validation
     train: false                  # Mode validation
     target_size: 128               # Taille cible des volumes
 
@@ -87,6 +87,6 @@ metrics:
 
 # Configuration de sauvegarde des checkpoints
 checkpoint:
-  save_dir: ../checkpoints/SegFormer3D  # Répertoire de sauvegarde
+  save_dir: ./checkpoints  # Répertoire de sauvegarde
   save_freq: 10                  # Fréquence de sauvegarde (toutes les 10 époques)
   keep_last: 5                   # Nombre de checkpoints à conserver

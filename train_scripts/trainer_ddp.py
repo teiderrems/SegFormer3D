@@ -1,7 +1,10 @@
 import os
 import sys
 import torch
-import evaluate
+try:
+    import evaluate
+except Exception:
+    evaluate = None
 import yaml
 import argparse
 import warnings
