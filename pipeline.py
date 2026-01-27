@@ -122,6 +122,7 @@ def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, v
             "--input_dir", str(preprocessed_path),
             "--output_dir", str(preprocessed_path),
             "--test_size", str(test_size),
+            "--test_ratio", str(test_ratio),
             "--random_state", str(random_seed),
             "--stratified", "true"
         ]
