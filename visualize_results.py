@@ -363,70 +363,23 @@ def create_error_visualizations(prediction, modalities, labels, output_dir, pati
     # Calculer métriques
     metrics = compute_segmentation_metrics(prediction, labels)
 
-    # Métriques avancées (Hausdorff, ASSD, SSIM)
-    # Utiliser uniquement la classe d'intérêt (non-fond). Si plusieurs classes, calcule pour chaque classe >0 moyenné.
-    advanced = {}
-    classes = [int(k.split('_')[1]) for k in metrics.keys() if k.startswith('class_')]
-    non_background = [c for c in classes if c != 0]
-
-    # Calculer Hausdorff/ASSD par classe et moyenne
-    hausdorffs = {}
-    assds = {}
-    ssim_means = {}
-
-    for c in non_background:
-        mask_pred = (prediction == c).astype(bool)
-        mask_true = (labels == c).astype(bool)
-        h_val = hausdorff_distance(mask_pred, mask_true, spacing=spacing)
-        a_val = average_symmetric_surface_distance(mask_pred, mask_true, spacing=spacing)
-        # HD95
-        hd95 = hausdorff_95(mask_pred, mask_true, spacing=spacing)
-        # distance distribution stats (in same units)
-        pts1 = _surface_points(mask_pred)
-        pts2 = _surface_points(mask_true)
-        if pts1.shape[0] == 0 or pts2.shape[0] == 0:
-            dist_stats = {'mean': None, 'median': None, 'p95': None}
-        else:
-            p1 = _to_physical(pts1, spacing)
-            p2 = _to_physical(pts2, spacing)
-            tree_p2 = cKDTree(p2)
-            tree_p1 = cKDTree(p1)
-            d12_min, _ = tree_p2.query(p1)
-            d21_min, _ = tree_p1.query(p2)
-            mins = np.concatenate([d12_min, d21_min])
-            dist_stats = {'mean': float(np.mean(mins)), 'median': float(np.median(mins)), 'p95': float(np.percentile(mins, 95))}
-        ssim_mean, ssim_list = compute_ssim_3d(mask_pred.astype(np.uint8), mask_true.astype(np.uint8))
-        ssim_means[f'class_{c}'] = {'ssim_mean': ssim_mean, 'ssim_slices': ssim_list}
-
-        # Store additional metrics
-        hausdorffs[f'class_{c}'] = {'hausdorff': h_val, 'hd95': hd95, 'dist_stats': dist_stats}
-        assds[f'class_{c}'] = {'assd': a_val}
-
-    # Moyennes (ignorer NaN) — extraire les valeurs numériques
-    valid_haus_vals = [v['hausdorff'] for v in hausdorffs.values() if isinstance(v, dict) and v.get('hausdorff') is not None]
-    valid_assd_vals = [v['assd'] for v in assds.values() if isinstance(v, dict) and v.get('assd') is not None]
-
-    advanced['hausdorff'] = float(np.mean(valid_haus_vals)) if len(valid_haus_vals) > 0 else None
-    advanced['assd'] = float(np.mean(valid_assd_vals)) if len(valid_assd_vals) > 0 else None
-    advanced['hausdorff_per_class'] = hausdorffs
-    advanced['assd_per_class'] = assds
-    advanced['ssim_per_class'] = ssim_means
-
+    # Métriques avancées désactivées
+    # Calculs volumineux (Hausdorff, ASSD, SSIM) peuvent nécessiter beaucoup de mémoire pour de grands volumes
+    # Nous les désactivons ici pour éviter les erreurs OOM et réduire le temps d'exécution.
+    advanced = {'note': 'disabled (hausdorff/assd/ssim skipped due to memory/performance constraints)'}
     metrics['advanced'] = advanced
 
-    # Sauvegarder JSON
+    # Sauvegarder JSON (sans métriques avancées)
     json_path = os.path.join(output_dir, f"{patient_name}_errors.json")
     with open(json_path, 'w') as f:
         json.dump(metrics, f, indent=2)
 
-    # Enregistrer un résumé lisible
+    # Enregistrer un résumé lisible indiquant que les métriques avancées ont été désactivées
     advanced_txt = os.path.join(output_dir, f"{patient_name}_advanced_errors.txt")
     with open(advanced_txt, 'w') as af:
-        af.write('Advanced metrics summary\n')
-        af.write(f"Hausdorff (mean across classes): {advanced['hausdorff']}\n")
-        af.write(f"ASSD (mean across classes): {advanced['assd']}\n")
-        for k, v in hausdorffs.items():
-            af.write(f"{k} - Hausdorff: {v}, ASSD: {assds.get(k)}\n")
+        af.write('Advanced metrics disabled for this run.\n')
+        af.write('Reason: memory/performance constraints for large volumes (e.g., 240^3).\n')
+        af.write('To re-enable, adjust visualization settings or enable computation in code.\n')
 
     if VERBOSITY != 'quiet':
         print(f"Métriques sauvegardées: {json_path}")
