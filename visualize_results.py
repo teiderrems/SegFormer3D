@@ -314,7 +314,11 @@ def hausdorff_95(mask1, mask2, spacing=None):
 
 
 def average_symmetric_surface_distance(mask1, mask2, spacing=None):
-    """Average Symmetric Surface Distance (ASSD) en voxels (ou mm si spacing fourni)."""
+    """Average Symmetric Surface Distance (ASSD) en voxels (ou mm si spacing fourni).
+
+    Implémentation mémoire-efficiente: utilise cKDTree.query pour éviter de construire
+    une matrice de distances dense via cdist (qui peut exploser en RAM pour grands volumes).
+    """
     pts1 = _surface_points(mask1)
     pts2 = _surface_points(mask2)
     if pts1.shape[0] == 0 or pts2.shape[0] == 0:
@@ -323,10 +327,14 @@ def average_symmetric_surface_distance(mask1, mask2, spacing=None):
     p1 = _to_physical(pts1, spacing)
     p2 = _to_physical(pts2, spacing)
 
-    d12 = cdist(p1, p2)
-    d21 = cdist(p2, p1)
-    mean12 = d12.min(axis=1).mean()
-    mean21 = d21.min(axis=1).mean()
+    # Utiliser k-d trees pour obtenir les distances minimales de façon économe en mémoire
+    tree_p2 = cKDTree(p2)
+    tree_p1 = cKDTree(p1)
+    d12_min, _ = tree_p2.query(p1)
+    d21_min, _ = tree_p1.query(p2)
+
+    mean12 = float(np.mean(d12_min))
+    mean21 = float(np.mean(d21_min))
     return float((mean12 + mean21) / 2.0)
 
 def compute_ssim_3d(prediction, labels):
