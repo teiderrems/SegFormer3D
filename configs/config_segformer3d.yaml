@@ -12,11 +12,11 @@ model:
   depths: [2, 2, 2, 2]            # Profondeur par couche
   decoder_head_embedding_dim: 256 # Dimension du décodeur
   decoder_dropout: 0.1            # Dropout du décodeur
-  input_size: [128, 128, 128]        # Dimensions d'entrée du modèle
+  input_size: [240, 240, 240]        # Dimensions d'entrée du modèle
 
 # Configuration de l'entraînement
 training_parameters:
-  batch_size: 2                   # Taille du batch d'entraînement
+  batch_size: 1                   # Taille du batch d'entraînement
   num_epochs: 10                 # Nombre total d'époques
   print_every: 10                 # Fréquence d'impression des logs
   cutoff_epoch: 100               # Époque de cutoff (non utilisé)
@@ -39,26 +39,26 @@ warmup_scheduler:
 
 # Configuration de l'inférence par fenêtre glissante
 sliding_window_inference:
-  roi: [128, 128, 128]               # Région d'intérêt pour l'inférence
-  sw_batch_size: 2                # Taille du batch pour l'inférence
+  roi: [240, 240, 240]               # Région d'intérêt pour l'inférence
+  sw_batch_size: 1                # Taille du batch pour l'inférence
 
 # Configuration des données
 dataset_parameters:
   dataset_type: prostate_seg      # Type de dataset utilisé
   train_dataset_args:
-    root: ./data/preprocessed_data_128_128_128   # Chemin vers les données d'entraînement
-    split_file: ./data/preprocessed_data_128_128_128/train.csv  # Fichier de split d'entraînement
+    root: ./data/preprocessed_data_240_240_240   # Chemin vers les données d'entraînement
+    split_file: ./data/preprocessed_data_240_240_240/train.csv  # Fichier de split d'entraînement
     train: true                   # Mode entraînement
-    target_size: 128               # Taille cible des volumes
+    target_size: 240               # Taille cible des volumes
   val_dataset_args:
-    root: ./data/preprocessed_data_128_128_128      # Chemin vers les données de validation
-    split_file: ./data/preprocessed_data_128_128_128/validation.csv    # Fichier de split de validation
+    root: ./data/preprocessed_data_240_240_240      # Chemin vers les données de validation
+    split_file: ./data/preprocessed_data_240_240_240/validation.csv    # Fichier de split de validation
     train: false                  # Mode validation
-    target_size: 128               # Taille cible des volumes
+    target_size: 240               # Taille cible des volumes
 
 # Configuration des dataloaders
 dataloader:
-  batch_size: 2                   # Taille du batch pour les dataloaders
+  batch_size: 1                   # Taille du batch pour les dataloaders
   shuffle: true                   # Mélanger les données à chaque époque
   num_workers: 0                  # Nombre de workers pour le chargement (0 pour debug)
   drop_last: true                 # Supprimer le dernier batch incomplet

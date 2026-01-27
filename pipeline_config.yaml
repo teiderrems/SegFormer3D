@@ -6,7 +6,7 @@ preprocessing:
   # Taille cible pour le resampling des volumes (en voxels)
   # Valeurs recommandées: 64, 96, 128, 256
   # Plus la taille est grande, plus la précision est élevée mais plus la mémoire GPU est nécessaire
-  target_size: 96
+  target_size: 240
 
   # Méthode de normalisation des intensités
   # 'minmax': Normalisation min-max [0,1]
@@ -23,9 +23,9 @@ splits:
 
   # Pour split_type='fixed': proportions train/validation/test
   # Doivent sommer à 1.0
-  train_ratio: 0.8    # 80% pour entraînement
+  train_ratio: 0.6    # 60% pour entraînement
   val_ratio: 0.2      # 20% pour validation
-  test_ratio: 0.0     # 0% pour test (utilise seulement train/val)
+  test_ratio: 0.2     # 20% pour test
 
   # Pour split_type='kfold': nombre de folds
   k_folds: 5
@@ -62,7 +62,7 @@ paths:
   raw_data_dir: "./data/raw_prostate"
 
   # Répertoire pour les données prétraitées
-  preprocessed_data_dir: "./data/preprocessed_data_128_128_128"
+  preprocessed_data_dir: "./data/preprocessed_data_240_240_240"
 
   # Répertoire des configurations des modèles
   config_dir: "./configs"
@@ -76,7 +76,7 @@ paths:
 # === OPTIONS AVANCÉES ===
 advanced:
   # Sauter l'étape de prétraitement si déjà fait
-  skip_preprocess: true
+  skip_preprocess: false
 
   # Niveau de verbosité (0=minimal, 1=normal, 2=détaillé)
   verbosity: 2
