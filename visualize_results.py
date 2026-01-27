@@ -42,6 +42,18 @@ def load_prediction_and_data(prediction_path, patient_dir):
     if labels.ndim == 4 and labels.shape[0] == 1:
         labels = labels.squeeze(0)
 
+    # If prediction and labels shapes do not match, resample prediction to labels shape using nearest-neighbor
+    if prediction.shape != labels.shape:
+        print(f"Warning: prediction shape {prediction.shape} != labels shape {labels.shape} -- resampling prediction to labels shape")
+        # Compute zoom factors as target / source
+        factors = [float(t) / s for s, t in zip(prediction.shape, labels.shape)]
+        prediction = ndimage.zoom(prediction, zoom=factors, order=0)
+        # Ensure integer labels and same dtype as labels
+        try:
+            prediction = prediction.astype(labels.dtype)
+        except Exception:
+            prediction = prediction.astype(np.int32)
+
     return prediction, modalities, labels
 
 def create_comparison_visualization(prediction, modalities, labels, output_dir, patient_name):

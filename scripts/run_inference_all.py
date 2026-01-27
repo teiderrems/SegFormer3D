@@ -9,7 +9,21 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-CSV = (ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv').resolve()
+# Auto-detect test CSV in any preprocessed_data_* folder (prefer higher resolution like 240 if available)
+csv_candidates = list((ROOT / 'data').glob('preprocessed_data_*' '/test.csv'))
+if not csv_candidates:
+    # fallback: look for test.csv anywhere under data/
+    csv_candidates = list((ROOT / 'data').rglob('test.csv'))
+if csv_candidates:
+    # prefer one containing '240' if present, else pick the most recently modified
+    preferred = None
+    for p in csv_candidates:
+        if '240' in str(p):
+            preferred = p
+            break
+    CSV = preferred.resolve() if preferred else max(csv_candidates, key=lambda p: p.stat().st_mtime).resolve()
+else:
+    CSV = (ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv').resolve()
 # Detect checkpoint candidates (prefer repo-level checkpoints/ then SegFormer3D subfolder, try final if best missing)
 candidates = [
     ROOT / 'checkpoints' / 'best_model.pth',

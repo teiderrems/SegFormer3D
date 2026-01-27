@@ -79,19 +79,36 @@ def has_been_processed(patient):
 
 def main():
     # CLI: verbosity level
-    parser = argparse.ArgumentParser(description='Batch visualizations runner')
-    parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité: quiet|normal|debug')
-    parser.add_argument('--timeout', type=int, default=600, help='Timeout (seconds) for each visualization subprocess; 0 = no timeout')
-    parser.add_argument('--skip_volume', action='store_true', help='Skip heavy volumetric visualizations (--volume_vis) to avoid long runs')
+    parser = argparse.ArgumentParser(description="Générateur de visualisations en batch pour tous les patients")
+    parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité : quiet | normal | debug')
+    parser.add_argument('--timeout', type=int, default=600, help='Timeout (secondes) pour chaque sous-processus de visualisation ; 0 = pas de timeout')
+    parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D (option `--volume_vis`) pour réduire la durée d\'exécution')
+    parser.add_argument('--test_csv', type=str, default=None, help='Chemin vers un fichier `test.csv` (prend le pas sur la détection automatique)')
+    parser.add_argument('--test_dir', type=str, default=None, help='Chemin vers le répertoire contenant le dataset prétraité (utilise `<dir>/test.csv`)')
     args = parser.parse_args()
     verbosity = args.verbosity
     timeout = args.timeout
     skip_volume = args.skip_volume
-
+    failed = []  # Liste pour collecter les patients ayant échoué
     os.makedirs(VIS_DIR, exist_ok=True)
-    patients = read_test_csv(TEST_CSV)
+
+    # Determine which test CSV to use (priority: --test_csv > --test_dir > auto-detected TEST_CSV)
+    if args.test_csv:
+        test_csv = Path(args.test_csv)
+        if not test_csv.exists():
+            print(f"Provided --test_csv does not exist: {test_csv}")
+            return
+    elif args.test_dir:
+        test_csv = Path(args.test_dir) / 'test.csv'
+        if not test_csv.exists():
+            print(f"No test.csv found in provided --test_dir: {args.test_dir}")
+            return
+    else:
+        test_csv = TEST_CSV
+
+    patients = read_test_csv(test_csv)
     if verbosity != 'quiet':
-        print(f"Found {len(patients)} patients in {TEST_CSV}")
+        print(f"Found {len(patients)} patients in {test_csv}")
 
     for patient in tqdm(patients, desc="Visualizations", unit="patient"):
         if verbosity != 'quiet':
@@ -108,8 +125,8 @@ def main():
                 print(f"  Already processed (found {patient}_errors.json). Skipping.")
             continue
 
-        # Use the same preprocessed folder where TEST_CSV resides (handles 240/128 variants)
-        input_dir = TEST_CSV.parent / patient
+        # Use the same preprocessed folder where the selected test CSV resides (handles 240/128 variants)
+        input_dir = test_csv.parent / patient
         outdir.mkdir(parents=True, exist_ok=True)
         if not input_dir.exists():
             # fallback: try previous hardcoded path to not break older setups

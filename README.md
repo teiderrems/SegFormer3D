@@ -178,6 +178,16 @@ python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml
 
 python inference_simple.py --checkpoint_path ./checkpoints/best_model.pt
 
+# 5. Visualisations batch (métriques + images)
+
+Après avoir généré les prédictions, vous pouvez lancer toutes les visualisations et calculer les métriques pour l'ensemble du `test.csv` grâce au script batch :
+
+```bash
+python scripts/run_visualizations_all.py --test_csv data/preprocessed_data_128_128_128/test.csv --verbosity normal
+```
+
+Utilisez `--skip_volume` pour ignorer la visualisation volumétrique 3D si vous souhaitez un traitement plus rapide.
+
 ```
 
 
