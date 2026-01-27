@@ -81,8 +81,12 @@ def main():
     # CLI: verbosity level
     parser = argparse.ArgumentParser(description='Batch visualizations runner')
     parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité: quiet|normal|debug')
+    parser.add_argument('--timeout', type=int, default=600, help='Timeout (seconds) for each visualization subprocess; 0 = no timeout')
+    parser.add_argument('--skip_volume', action='store_true', help='Skip heavy volumetric visualizations (--volume_vis) to avoid long runs')
     args = parser.parse_args()
     verbosity = args.verbosity
+    timeout = args.timeout
+    skip_volume = args.skip_volume
 
     os.makedirs(VIS_DIR, exist_ok=True)
     patients = read_test_csv(TEST_CSV)
@@ -119,28 +123,41 @@ def main():
                '--prediction', str(pred),
                '--input_dir', str(input_dir),
                '--output_dir', str(outdir),
-               '--compute_errors',
-               '--volume_vis']
+               '--compute_errors']
+        # Add volume visualization unless user asked to skip it
+        if not skip_volume:
+            cmd.append('--volume_vis')
         # Always pass verbosity to child script so behavior is consistent
         cmd.extend(['--verbosity', verbosity])
 
         if verbosity != 'quiet':
             print('  Running:', ' '.join(cmd))
         t0 = time.time()
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        duration = time.time() - t0
-        if verbosity == 'debug':
-            print(f"[debug] Visualization {patient} duration: {duration:.3f}s")
-        if res.returncode != 0:
-            if verbosity != 'quiet':
-                print('  Error running visualization:', res.returncode)
-                print(res.stderr)
+        try:
+            if timeout and timeout > 0:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             else:
-                # always show errors even in quiet mode
-                print(f"Error for {patient}: {res.returncode}\n{res.stderr}")
-        else:
-            if verbosity != 'quiet':
-                print(f"  Visualizations saved to {outdir}")
+                res = subprocess.run(cmd, capture_output=True, text=True)
+            duration = time.time() - t0
+            if verbosity == 'debug':
+                print(f"[debug] Visualization {patient} duration: {duration:.3f}s")
+            if res.returncode != 0:
+                if verbosity != 'quiet':
+                    print('  Error running visualization:', res.returncode)
+                    print(res.stderr)
+                else:
+                    # always show errors even in quiet mode
+                    print(f"Error for {patient}: {res.returncode}\n{res.stderr}")
+                failed.append(patient)
+            else:
+                if verbosity != 'quiet':
+                    print(f"  Visualizations saved to {outdir}")
+        except subprocess.TimeoutExpired as e:
+            print(f"Visualization for {patient} timed out after {timeout} seconds; skipping.")
+            failed.append(patient)
+        except Exception as e:
+            print(f"Unexpected error during visualization for {patient}: {e}")
+            failed.append(patient)
 
 
 
