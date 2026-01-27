@@ -464,19 +464,25 @@ def main():
             continue
 
         # 3. Inférence
-        # Trouver le checkpoint le plus récent
-        checkpoint_dir = Path(config['paths']['checkpoint_dir']) / arch
-        if not checkpoint_dir.exists():
-            print(f"Répertoire de checkpoints non trouvé: {checkpoint_dir}")
+        # Chercher le checkpoint: d'abord dans le sous-dossier par architecture, sinon dans le répertoire de checkpoints général
+        checkpoint_dir_arch = Path(config['paths']['checkpoint_dir']) / arch
+        repo_ckpt_dir = Path(config['paths']['checkpoint_dir'])
+        candidates = []
+        if checkpoint_dir_arch.exists():
+            candidates = list(checkpoint_dir_arch.glob("*.pth")) + list(checkpoint_dir_arch.glob("*.pt"))
+        else:
+            # Rechercher des fichiers nommés best_model.* ou final_model.* puis tout .pth/.pt
+            candidates = list(repo_ckpt_dir.glob("best_model.*")) + list(repo_ckpt_dir.glob("final_model.*"))
+            candidates += list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
+
+        if not candidates:
+            print(f"Aucun checkpoint trouvé ni dans {checkpoint_dir_arch} ni dans {repo_ckpt_dir}")
             continue
 
-        checkpoints = list(checkpoint_dir.glob("*.pth")) + list(checkpoint_dir.glob("*.pt"))
-        if not checkpoints:
-            print(f"Aucun checkpoint trouvé dans {checkpoint_dir}")
-            continue
+        # Prendre le checkpoint le plus récent parmi les candidats
+        checkpoint_path = max(candidates, key=lambda p: p.stat().st_mtime)
 
-        # Prendre le checkpoint le plus récent
-        checkpoint_path = max(checkpoints, key=lambda p: p.stat().st_mtime)
+        print(f"Utilisation du checkpoint: {checkpoint_path}")
 
         test_data_dir = Path(config['paths']['preprocessed_data_dir'])  # Les patients sont directement dans preprocessed_data pour l'inférence
         results_dir = Path(config['paths']['results_dir']) / arch
