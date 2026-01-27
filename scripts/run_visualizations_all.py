@@ -13,24 +13,52 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / 'configs' / 'config_segformer3d.yaml'
-TEST_CSV = ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv'
+# Auto-detect test CSV in any preprocessed_data_* folder (prefer '240' if available)
+csv_candidates = list((ROOT / 'data').glob('preprocessed_data_*' '/test.csv'))
+if not csv_candidates:
+    csv_candidates = list((ROOT / 'data').rglob('test.csv'))
+if csv_candidates:
+    preferred = None
+    for p in csv_candidates:
+        if '240' in str(p):
+            preferred = p
+            break
+    TEST_CSV = preferred if preferred else max(csv_candidates, key=lambda p: p.stat().st_mtime)
+else:
+    TEST_CSV = ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv'
+
 RESULTS_DIR = ROOT / 'results' / 'SegFormer3D'
 VIS_DIR = ROOT / 'visualizations' / 'SegFormer3D'
 PYTHON = 'python'
 
 
 def read_test_csv(csv_path):
+    """Read test CSV robustly: support CSVs with header (data_path/case_name) or plain list of paths/ids.
+    Returns list of patient folder names (e.g., patient_002)
+    """
     patients = []
     with open(csv_path, 'r', encoding='utf-8') as f:
+        # Try DictReader first (handles headered CSVs)
+        dict_reader = csv.DictReader(f)
+        if dict_reader.fieldnames and any(h in dict_reader.fieldnames for h in ["case_name", "data_path"]):
+            for r in dict_reader:
+                if 'case_name' in r and r['case_name']:
+                    patients.append(Path(r['case_name']).name)
+                elif 'data_path' in r and r['data_path']:
+                    patients.append(Path(r['data_path']).name)
+            return patients
+        # Fallback to plain reader (no header)
+        f.seek(0)
         reader = csv.reader(f)
         for r in reader:
             if len(r) == 0:
                 continue
-            # Expect either full path or folder name like patient_002
             val = r[0].strip()
-            if val:
-                # Normalize: if path contains patient_ prefix, take basename
-                patients.append(Path(val).name)
+            if not val:
+                continue
+            if val.lower() == 'data_path' or val.lower() == 'case_name':
+                continue
+            patients.append(Path(val).name)
     return patients
 
 
@@ -76,8 +104,15 @@ def main():
                 print(f"  Already processed (found {patient}_errors.json). Skipping.")
             continue
 
-        input_dir = ROOT / 'data' / 'preprocessed_data_128_128_128' / patient
+        # Use the same preprocessed folder where TEST_CSV resides (handles 240/128 variants)
+        input_dir = TEST_CSV.parent / patient
         outdir.mkdir(parents=True, exist_ok=True)
+        if not input_dir.exists():
+            # fallback: try previous hardcoded path to not break older setups
+            input_dir = ROOT / 'data' / 'preprocessed_data_128_128_128' / patient
+            if not input_dir.exists():
+                print(f"  Input data not found for {patient} (checked {TEST_CSV.parent} and preprocessed_data_128_128_128). Skipping.")
+                continue
 
         cmd = [PYTHON, str(ROOT / 'visualize_results.py'),
                '--config', str(CONFIG),
