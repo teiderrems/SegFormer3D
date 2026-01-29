@@ -176,17 +176,39 @@ python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml
 
 # 4. Inférence
 
-python inference_simple.py --checkpoint_path ./checkpoints/best_model.pt
+- Inference manuelle (par patient)
+
+```bash
+python inference_simple.py --checkpoint ./checkpoints/best_model.pth --input_dir data/preprocessed_data_240_240_240/patient_002 --output_dir results/SegFormer3D/patient_002
+```
+
+- Inference batch (auto détecte `test.csv`, config et checkpoint si présents) :
+
+```bash
+python scripts/run_inference_all.py --verbosity normal
+```
+
+- Via la pipeline (exécute les checkpoints demandés et place les résultats dans `results/SegFormer3D/<checkpoint>/`):
+
+```bash
+python pipeline.py --checkpoints best_model final_model
+```
 
 # 5. Visualisations batch (métriques + images)
 
 Après avoir généré les prédictions, vous pouvez lancer toutes les visualisations et calculer les métriques pour l'ensemble du `test.csv` grâce au script batch :
 
 ```bash
-python scripts/run_visualizations_all.py --test_csv data/preprocessed_data_128_128_128/test.csv --verbosity normal
+# Visualisations pour les prédictions présentes dans results/SegFormer3D (par défaut cherche le CSV de test)
+python scripts/run_visualizations_all.py --verbosity normal
 ```
 
-Utilisez `--skip_volume` pour ignorer la visualisation volumétrique 3D si vous souhaitez un traitement plus rapide.
+Options utiles :
+
+- `--results_subdir <name>` : utiliser un sous-dossier sous `results/SegFormer3D` (ex: `best_model`, `final_model`) pour rechercher les prédictions
+- `--vis_tag <name>` : nommer le dossier de visualisations généré sous `visualizations/SegFormer3D/<name>/`
+- `--skip_volume` : ignorer la visualisation volumétrique 3D pour un traitement plus rapide
+- `--timeout <s>` : timeout en secondes par patient (0 = pas de timeout)
 
 ```
 

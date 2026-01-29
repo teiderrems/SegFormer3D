@@ -85,11 +85,25 @@ def main():
     parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D (option `--volume_vis`) pour réduire la durée d\'exécution')
     parser.add_argument('--test_csv', type=str, default=None, help='Chemin vers un fichier `test.csv` (prend le pas sur la détection automatique)')
     parser.add_argument('--test_dir', type=str, default=None, help='Chemin vers le répertoire contenant le dataset prétraité (utilise `<dir>/test.csv`)')
+    parser.add_argument('--results_subdir', type=str, default=None, help='Sous-dossier sous results/SegFormer3D contenant les prédictions (ex: best_model, final_model)')
+    parser.add_argument('--vis_tag', type=str, default=None, help='Suffixe pour nommer le dossier de visualisations (ex: best_model, final_model)')
     args = parser.parse_args()
     verbosity = args.verbosity
     timeout = args.timeout
     skip_volume = args.skip_volume
     failed = []  # Liste pour collecter les patients ayant échoué
+
+    # Configure RESULTS_DIR and VIS_DIR according to optional tags/subdirs
+    if args.results_subdir:
+        RESULTS_DIR = ROOT / 'results' / 'SegFormer3D' / args.results_subdir
+    else:
+        RESULTS_DIR = ROOT / 'results' / 'SegFormer3D'
+
+    if args.vis_tag:
+        VIS_DIR = ROOT / 'visualizations' / 'SegFormer3D' / args.vis_tag
+    else:
+        VIS_DIR = ROOT / 'visualizations' / 'SegFormer3D'
+
     os.makedirs(VIS_DIR, exist_ok=True)
 
     # Determine which test CSV to use (priority: --test_csv > --test_dir > auto-detected TEST_CSV)
@@ -175,6 +189,61 @@ def main():
         except Exception as e:
             print(f"Unexpected error during visualization for {patient}: {e}")
             failed.append(patient)
+
+    # After processing all patients, aggregate per-patient metrics into a summary JSON
+    try:
+        import json
+        from statistics import mean, median
+
+        summary = {}
+        class_metrics = {}
+        patient_count = 0
+        errors_files = list(VIS_DIR.glob('*/*_errors.json'))
+        for ef in errors_files:
+            try:
+                with open(ef, 'r') as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            patient_count += 1
+            for k, v in data.items():
+                if not k.startswith('class_'):
+                    continue
+                if k not in class_metrics:
+                    class_metrics[k] = {'dice': [], 'iou': [], 'precision': [], 'recall': [], 'support': []}
+                class_metrics[k]['dice'].append(v.get('dice', 0.0))
+                class_metrics[k]['iou'].append(v.get('iou', 0.0))
+                class_metrics[k]['precision'].append(v.get('precision', 0.0))
+                class_metrics[k]['recall'].append(v.get('recall', 0.0))
+                class_metrics[k]['support'].append(v.get('support', 0))
+
+        # Compute aggregates
+        summary['n_patients'] = patient_count
+        summary['classes'] = {}
+        for k, vals in class_metrics.items():
+            summary['classes'][k] = {
+                'dice_mean': mean(vals['dice']) if vals['dice'] else None,
+                'dice_median': median(vals['dice']) if vals['dice'] else None,
+                'iou_mean': mean(vals['iou']) if vals['iou'] else None,
+                'precision_mean': mean(vals['precision']) if vals['precision'] else None,
+                'recall_mean': mean(vals['recall']) if vals['recall'] else None,
+                'support_total': sum(vals['support']) if vals['support'] else 0
+            }
+
+        summary_path = VIS_DIR / 'summary_metrics.json'
+        with open(summary_path, 'w') as sf:
+            json.dump(summary, sf, indent=2)
+        if verbosity != 'quiet':
+            print(f"Summary metrics written to {summary_path}")
+    except Exception as e:
+        print(f"Warning: failed to aggregate metrics: {e}")
+
+    if failed:
+        print('\nSome patients failed during visualization:')
+        print(failed)
+    else:
+        if verbosity != 'quiet':
+            print('\nAll patients processed successfully')
 
 
 

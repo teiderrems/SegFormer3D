@@ -126,6 +126,15 @@ python pipeline.py \
 
     --split_type fixed
 
+
+# Inférence et visualisations (sans prétraitement)
+
+python pipeline.py \
+    --skip_preprocess \
+    --checkpoints best_model final_model \
+    --visualize \
+    --skip_volume
+
 ```
 
 
@@ -161,6 +170,14 @@ python pipeline.py \
 - `--random_seed` : Seed pour reproductibilité (défaut: 42)
 
 - `--target_size` : Taille cible pour le resampling des volumes (remplace la config)
+
+- `--checkpoints` : Liste de checkpoints à inférer (ex: `--checkpoints best_model final_model`). Si non fournie, la pipeline essaie par défaut `best_model` puis `final_model`.
+
+- `--visualize` : Générer visualisations et métriques après inférence (utilise `scripts/run_visualizations_all.py`).
+
+- `--skip_volume` : Ignorer la visualisation volumétrique 3D pour accélérer la génération des visualisations.
+
+- `--vis_timeout` : Timeout par patient (en secondes) pour la génération de visualisations (par défaut 600 s).
 
 
 
@@ -326,6 +343,29 @@ La pipeline génère automatiquement les fichiers train.csv et validation.csv (o
 - Sauvegarde des résultats
 
 - Calcul des métriques
+
+
+### Format de sortie des visualisations et métriques
+
+Après exécution des scripts d'inférence et de visualisation, les fichiers suivants sont générés :
+
+- `results/SegFormer3D/<checkpoint>/<patient>/prediction_<patient>.pt` : fichier de prédiction PyTorch par patient (entrée du script de visualisation).
+- `visualizations/SegFormer3D/<tag>/<patient>/*` : dossier de visualisations par patient contenant :
+  - `<patient>_comparison.png` : comparaison Image / GT / Prédiction / Overlay
+  - `<patient>_axial_slices.png` : coupes axiales détaillées
+  - `<patient>_statistics.png` : distribution des classes et Dice par classe
+  - `<patient>_errors.json` : métriques détaillées (dice, iou, precision, recall, support)
+  - `<patient>_errors.png` : graphique résumé des métriques
+  - `<patient>_slice_errors.png` : erreur slice-wise (MAE)
+  - `<patient>_error_overlay.png` : overlay d'erreur sur la coupe centrale
+  - `<patient>_advanced_errors.txt` : résumé indiquant si les métriques avancées (Hausdorff/ASSD/SSIM) ont été calculées ou désactivées
+
+- `visualizations/SegFormer3D/<tag>/summary_metrics.json` : agrégation des métriques par classe (moyennes, médianes, support total) pour tous les patients traités.
+
+Notes :
+- Par défaut, les métriques avancées (Hausdorff, ASSD, SSIM) sont désactivées dans `visualize_results.py` pour éviter des problèmes mémoire sur grands volumes (240^3). Elles peuvent être réactivées en modifiant le code si nécessaire.
+- Utilisez `scripts/run_visualizations_all.py` avec les options `--results_subdir <name>` et `--vis_tag <name>` pour contrôler d'où proviennent les prédictions et où seront stockées les visualisations.
+- Pour accélérer le traitement, passez `--skip_volume` pour ignorer la visualisation volumétrique 3D et `--timeout <s>` pour définir un timeout par patient.
 
 
 

@@ -37,18 +37,33 @@ for p in candidates:
     if p.exists():
         CHECKPOINT = p.resolve()
         break
-if CHECKPOINT is None:
-    raise FileNotFoundError(f"No checkpoint found in expected locations: {candidates}")
 
 CONFIG = (ROOT / 'configs' / 'config_segformer3d.yaml').resolve()
-RESULTS_DIR = (ROOT / 'results' / 'SegFormer3D').resolve()
+DEFAULT_RESULTS_DIR = (ROOT / 'results' / 'SegFormer3D').resolve()
 INFER_SCRIPT = (ROOT / 'inference_simple.py').resolve()
 
-# CLI: verbosity level
+# CLI options: verbosity, checkpoint override and tag for results subfolder
 parser = argparse.ArgumentParser(description='Batch inference runner')
 parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité: quiet|normal|debug')
+parser.add_argument('--checkpoint', type=str, default=None, help='Chemin vers un checkpoint à utiliser (remplace la détection automatique)')
+parser.add_argument('--tag', type=str, default=None, help='Suffixe pour le dossier de résultats (ex: best_model, final_model)')
 args = parser.parse_args()
 VERBOSITY = args.verbosity
+
+# If user passed a checkpoint, prefer it; else fall back to auto-detection and raise if none found
+if args.checkpoint:
+    CHECKPOINT = Path(args.checkpoint).resolve()
+    if not CHECKPOINT.exists():
+        # do not raise: allow network-mounted paths; warn and continue
+        print(f"Warning: checkpoint file not found locally at {CHECKPOINT}; the inference command will still be attempted.")
+if CHECKPOINT is None:
+    raise FileNotFoundError(f"No checkpoint found in expected locations: {candidates} (or via --checkpoint)")
+
+# Determine results dir (optionally namespaced by tag)
+if args.tag:
+    RESULTS_DIR = DEFAULT_RESULTS_DIR / args.tag
+else:
+    RESULTS_DIR = DEFAULT_RESULTS_DIR
 
 if VERBOSITY != 'quiet':
     print(f"Using CSV: {CSV}")

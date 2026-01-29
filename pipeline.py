@@ -380,6 +380,11 @@ def main():
                        help="Graine aléatoire pour la reproductibilité (remplace la config)")
     parser.add_argument("--target_size", type=int,
                        help="Taille cible pour le resampling des volumes (remplace la config)")
+    parser.add_argument('--checkpoints', nargs='*', default=None,
+                        help="Liste de checkpoints à inférer (ex: best_model final_model). Si non fourni, utilise la détection automatique")
+    parser.add_argument('--visualize', action='store_true', help='Générer visualisations et métriques après inférence')
+    parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D pour la génération des visualisations')
+    parser.add_argument('--vis_timeout', type=int, default=600, help='Timeout (s) pour chaque visualisation de patient')
 
     args = parser.parse_args()
 
@@ -464,31 +469,66 @@ def main():
             continue
 
         # 3. Inférence
-        # Chercher le checkpoint: d'abord dans le sous-dossier par architecture, sinon dans le répertoire de checkpoints général
+        # Chercher les checkpoints demandés et exécuter l'inférence pour chacun
         checkpoint_dir_arch = Path(config['paths']['checkpoint_dir']) / arch
         repo_ckpt_dir = Path(config['paths']['checkpoint_dir'])
-        candidates = []
-        if checkpoint_dir_arch.exists():
-            candidates = list(checkpoint_dir_arch.glob("*.pth")) + list(checkpoint_dir_arch.glob("*.pt"))
+
+        # Déterminer la liste de checkpoints à exécuter (argument CLI > défaut)
+        if args.checkpoints:
+            requested_ckpts = args.checkpoints
         else:
-            # Rechercher des fichiers nommés best_model.* ou final_model.* puis tout .pth/.pt
-            candidates = list(repo_ckpt_dir.glob("best_model.*")) + list(repo_ckpt_dir.glob("final_model.*"))
-            candidates += list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
-
-        if not candidates:
-            print(f"Aucun checkpoint trouvé ni dans {checkpoint_dir_arch} ni dans {repo_ckpt_dir}")
-            continue
-
-        # Prendre le checkpoint le plus récent parmi les candidats
-        checkpoint_path = max(candidates, key=lambda p: p.stat().st_mtime)
-
-        print(f"Utilisation du checkpoint: {checkpoint_path}")
+            # Par défaut on essaie 'best_model' puis 'final_model'
+            requested_ckpts = ['best_model', 'final_model']
 
         test_data_dir = Path(config['paths']['preprocessed_data_dir'])  # Les patients sont directement dans preprocessed_data pour l'inférence
-        results_dir = Path(config['paths']['results_dir']) / arch
+        base_results_dir = Path(config['paths']['results_dir']) / arch
 
-        if not run_inference(arch, str(config_path), str(checkpoint_path), str(test_data_dir), str(results_dir)):
-            print(f"Échec de l'inférence pour {arch}")
+        any_success_for_arch = False
+        for ckpt_name in requested_ckpts:
+            # Rechercher des fichiers correspondant au nom du checkpoint (ex: best_model*) dans plusieurs emplacements
+            candidates = []
+            pattern = f"{ckpt_name}*"
+            if checkpoint_dir_arch.exists():
+                candidates += list(checkpoint_dir_arch.glob(pattern))
+            candidates += list(repo_ckpt_dir.glob(pattern))
+
+            # Fallback: prendre tout .pth/.pt si aucun n'a été trouvé pour ce nom
+            if not candidates:
+                candidates += list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
+
+            if not candidates:
+                print(f"Aucun checkpoint trouvé pour '{ckpt_name}' dans {checkpoint_dir_arch} ni {repo_ckpt_dir}. Ignorer.")
+                continue
+
+            # Choisir le plus récent parmi les candidats
+            checkpoint_path = max(candidates, key=lambda p: p.stat().st_mtime)
+            print(f"Utilisation du checkpoint '{ckpt_name}': {checkpoint_path}")
+
+            # Résultats séparés par tag (ex: results/SegFormer3D/best_model/)
+            results_dir = base_results_dir / ckpt_name
+            results_dir.mkdir(parents=True, exist_ok=True)
+
+            # Lancer l'inférence
+            ok = run_inference(arch, str(config_path), str(checkpoint_path), str(test_data_dir), str(results_dir))
+            if not ok:
+                print(f"Échec de l'inférence pour {arch} avec checkpoint {checkpoint_path}")
+                continue
+
+            any_success_for_arch = True
+
+            # Après inférence, générer les visualisations/métriques si demandé
+            if args.visualize:
+                vis_cmd = f"{sys.executable} scripts/run_visualizations_all.py --verbosity normal --results_subdir {ckpt_name} --vis_tag {ckpt_name}"
+                if args.skip_volume:
+                    vis_cmd += " --skip_volume"
+                if args.vis_timeout and args.vis_timeout > 0:
+                    vis_cmd += f" --timeout {args.vis_timeout}"
+
+                print(f"Lancement des visualisations pour {arch} / {ckpt_name} (commande: {vis_cmd})")
+                run_command(vis_cmd, cwd=str(Path(__file__).parent), description=f"Visualisations pour {arch} ({ckpt_name})")
+
+        if not any_success_for_arch:
+            print(f"Aucune inférence réussie pour {arch}")
             continue
 
         success_count += 1
