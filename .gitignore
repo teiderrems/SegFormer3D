@@ -62,8 +62,9 @@ logs/
 
 # Données et résultats (optionnel - décommentez si vous voulez ignorer)
 # preprocessed_data/
-# results/
-# visualizations/
+results/
+visualizations/
+visualizations_test/*
 
 # Checkpoints de modèles (généralement volumineux)
 checkpoints/

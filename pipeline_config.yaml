@@ -11,7 +11,7 @@ preprocessing:
   # Méthode de normalisation des intensités
   # 'minmax': Normalisation min-max [0,1]
   # 'zscore': Normalisation z-score (moyenne=0, écart-type=1)
-  normalize_method: "minmax"
+  normalize_method: "zscore"
 
   # Sauter les patients déjà prétraités (évite le recalcul)
   skip_existing: true
@@ -39,7 +39,7 @@ splits:
 # === PARAMÈTRES D'ENTRAÎNEMENT ===
 training:
   # Nombre d'époques d'entraînement
-  num_epochs: 100
+  num_epochs: 20
 
   # Taille de batch (adapter selon la mémoire GPU disponible)
   batch_size: 2

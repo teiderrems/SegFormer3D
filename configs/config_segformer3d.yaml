@@ -17,7 +17,7 @@ model:
 # Configuration de l'entraînement
 training_parameters:
   batch_size: 1                   # Taille du batch d'entraînement
-  num_epochs: 10                 # Nombre total d'époques
+  num_epochs: 20                 # Nombre total d'époques
   print_every: 10                 # Fréquence d'impression des logs
   cutoff_epoch: 100               # Époque de cutoff (non utilisé)
   calculate_metrics: true         # Calculer les métriques
