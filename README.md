@@ -112,6 +112,8 @@ pip install -r requirements.txt
 
 python pipeline.py
 
+# Désactiver toutes les augmentations (utile pour tests / comparaisons)
+python pipeline.py --disable_augmentations
 
 
 # Configuration haute résolution (128x128x128)
@@ -257,6 +259,16 @@ splits:
 architectures:
 
   enabled: ["SegFormer3D"]
+
+
+# Contrôle global des augmentations
+augmentations:
+
+  enabled: true            # Activer/désactiver les augmentations globalement (peut être surchargé par config d'architecture)
+
+Note: Vous pouvez désactiver temporairement toutes les augmentations lors de l'exécution de la pipeline via l'argument CLI `--disable_augmentations`. Les augmentations appliquées sont définies par chaque configuration d'architecture (`dataset_parameters.*.augmentations`).
+
+Vous pouvez spécifier un répertoire dédié pour les données de test via `paths.test_data_dir` dans `pipeline_config.yaml` ou en passant `--test_data_dir /chemin/vers/test` à `pipeline.py`. Si `test_data_dir` n'est pas fourni, la pipeline utilise `paths.preprocessed_data_dir` par défaut.
 
 ```
 
@@ -711,5 +723,7 @@ Si vous utilisez ce code dans vos recherches, veuillez citer :
 ---
 
 
+
+** Pour lancer les tests** : `pip install -r requirements-dev.txt && pytest -q`
 
 ** Prêt à segmenter !** Lancez `python pipeline.py --help` pour commencer.

@@ -59,6 +59,7 @@ class ProstateSegDataset(Dataset):
         transform: Optional[Any] = None,
         split_file: Optional[str] = None,
         target_size: Any = 96,  # Peut être int (96) ou liste [64, 64, 32]
+        debug_augment: bool = False,
     ) -> None:
         """
         Initialise le dataset de prostate.
@@ -108,6 +109,9 @@ class ProstateSegDataset(Dataset):
         self.csv = pd.read_csv(csv_fp)
         self.transform = transform
         self.is_train = is_train
+        self.debug_augment = debug_augment
+        # Counter to limit debug prints
+        self._debug_printed = 0
         
         # Gérer target_size: int ou liste [X, Y, Z]
         if isinstance(target_size, (list, tuple)):
@@ -218,9 +222,67 @@ class ProstateSegDataset(Dataset):
         
         # Applique les augmentations si fournies
         if self.transform:
-            data = self.transform(data)
-        
+            if self.debug_augment and self._debug_printed < 5:
+                # Keep a copy before transform
+                try:
+                    img_before = data['image'].clone()
+                    lbl_before = data['label'].clone()
+                except Exception:
+                    img_before = data['image']
+                    lbl_before = data['label']
+
+                data_after = self.transform(data)
+
+                # If transform returns a list of samples (e.g., RandSpatialCropSamplesd with num_samples>1)
+                if isinstance(data_after, (list, tuple)):
+                    img_changed = False
+                    lbl_changed = False
+                    # Check if any transformed sample differs from the original
+                    for s in data_after:
+                        try:
+                            img_a = s['image']
+                            lbl_a = s['label']
+                            if not _tensors_equal(img_before, img_a):
+                                img_changed = True
+                            if not _tensors_equal(lbl_before, lbl_a):
+                                lbl_changed = True
+                        except Exception:
+                            img_changed = True
+                            lbl_changed = True
+                    # Keep the first transformed sample as the returned data (consistent behavior)
+                    data = data_after[0]
+                else:
+                    data = data_after
+                    try:
+                        img_after = data['image']
+                        lbl_after = data['label']
+                        img_changed = not _tensors_equal(img_before, img_after)
+                        lbl_changed = not _tensors_equal(lbl_before, lbl_after)
+                    except Exception:
+                        img_changed = True
+                        lbl_changed = True
+
+                print(f"[DEBUG_AUG] sample {idx}: image_changed={img_changed}, label_changed={lbl_changed}")
+                self._debug_printed += 1
+            else:
+                data = self.transform(data)
+
         return data
+
+
+def _tensors_equal(a, b):
+    try:
+        import torch
+        if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+            return torch.equal(a, b)
+        # lists/tuples
+        if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+            if len(a) != len(b):
+                return False
+            return all(_tensors_equal(x, y) for x, y in zip(a, b))
+    except Exception:
+        return a == b
+    return a == b
 
 
 class ProstateSegDatasetMultiModal(Dataset):

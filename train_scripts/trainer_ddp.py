@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from metrics.segmentation_metrics import SlidingWindowInference
 import kornia
+from torchsummary import summary
 
 
 #################################################################################################
@@ -58,6 +59,8 @@ class Segmentation_Trainer:
 
         # model components
         self.model = model
+        target_size = config["dataset_parameters"]["train_dataset_args"]["target_size"]
+        summary(self.model, input_size=(1, target_size, target_size, target_size))
         self.optimizer = optimizer
         self.criterion = criterion
         self.train_dataloader = train_dataloader

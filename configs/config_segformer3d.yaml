@@ -46,15 +46,27 @@ sliding_window_inference:
 dataset_parameters:
   dataset_type: prostate_seg      # Type de dataset utilisé
   train_dataset_args:
-    root: ./data/preprocessed_data_240_240_240   # Chemin vers les données d'entraînement
-    split_file: ./data/preprocessed_data_240_240_240/train.csv  # Fichier de split d'entraînement
+    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240   # Chemin vers les données d'entraînement
+    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/train.csv  # Fichier de split d'entraînement
     train: true                   # Mode entraînement
     target_size: 240               # Taille cible des volumes
+    # Activer les augmentations pour l'entraînement (sera surchargé par la pipeline si besoin)
+    augmentations: true
+    # Mode debug: imprime pour les 5 premiers samples si les augmentations modifient l'image/label
+    debug_augment: false
   val_dataset_args:
-    root: ./data/preprocessed_data_240_240_240      # Chemin vers les données de validation
-    split_file: ./data/preprocessed_data_240_240_240/validation.csv    # Fichier de split de validation
+    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240      # Chemin vers les données de validation
+    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/validation.csv    # Fichier de split de validation
     train: false                  # Mode validation
     target_size: 240               # Taille cible des volumes
+    # Par défaut on n'applique pas d'augmentations en validation
+    augmentations: false
+  test_dataset_args:
+    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240      # Chemin vers les données de test
+    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/test.csv    # Fichier de split de test
+    train: false                  # Mode test
+    target_size: 240               # Taille cible des volumes
+    augmentations: false
 
 # Configuration des dataloaders
 dataloader:

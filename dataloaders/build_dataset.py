@@ -3,8 +3,13 @@ import sys
 sys.path.append("../")
 
 from typing import Dict
-from monai.data import DataLoader
-from augmentations.augmentations import build_augmentations
+# Import build_augmentations but allow import to succeed even if MONAI is not installed
+try:
+    from augmentations.augmentations import build_augmentations  # type: ignore
+except Exception:
+    # Fallback no-op transform builder used in unit tests when MONAI is not available
+    def build_augmentations(train: bool = True):
+        return None
 
 
 ######################################################################
@@ -24,10 +29,18 @@ def build_dataset(dataset_type: str, dataset_args: Dict):
         dataset = ProstateSegDataset(
             root_dir=dataset_args["root"],
             is_train=dataset_args["train"],
-            transform=build_augmentations(train=dataset_args["train"]),
+            # Appliquer les augmentations uniquement si le flag 'augmentations' est True (par défaut True pour conserver le comportement historique)
+            transform=(build_augmentations(train=dataset_args["train"]) if dataset_args.get("augmentations", True) and dataset_args["train"] else None),
             split_file=dataset_args.get("split_file", None),
             target_size=dataset_args.get("target_size", 96),
+            debug_augment=dataset_args.get("debug_augment", False),
         )
+
+        # Journaliser l'état des augmentations pour faciliter le debug / reproductibilité
+        aug_flag = bool(dataset_args.get("augmentations", True)) and bool(dataset_args.get("train", False))
+        mode = "train" if dataset_args.get("train", False) else "val"
+        print(f"[INFO] Dataset '{mode}' @ {dataset_args.get('root')} - augmentations: {'ENABLED' if aug_flag else 'DISABLED'}")
+
         return dataset
     else:
         raise ValueError(
@@ -38,18 +51,22 @@ def build_dataset(dataset_type: str, dataset_args: Dict):
 ######################################################################
 def build_dataloader(
     dataset, dataloader_args: Dict, config: Dict = None, train: bool = True
-) -> DataLoader:
-    """builds the dataloader for given dataset
+):
+    """Builds the dataloader for given dataset.
 
-    Args:
-        dataset (_type_): _description_
-        dataloader_args (Dict): _description_
-        config (Dict, optional): _description_. Defaults to None.
-        train (bool, optional): _description_. Defaults to True.
-
-    Returns:
-        DataLoader: _description_
+    This function imports MONAI's DataLoader lazily so the module can be imported
+    even if MONAI is not installed (useful for unit tests). If MONAI is not
+    available, it will fall back to PyTorch's DataLoader when possible.
     """
+    # Import lazily to avoid hard dependency at module import time
+    try:
+        from monai.data import DataLoader
+    except Exception:
+        try:
+            from torch.utils.data import DataLoader  # type: ignore
+        except Exception as e:
+            raise ImportError("MONAI or torch is required to build dataloaders: " + str(e))
+
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=dataloader_args["batch_size"],

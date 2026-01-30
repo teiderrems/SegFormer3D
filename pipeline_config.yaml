@@ -54,7 +54,7 @@ training:
 architectures:
   # Liste des architectures à traiter
   # Options: SegFormer3D
-  enabled: ["SegFormer3D"]
+  enabled: "SegFormer3D"
 
 # === CHEMINS DES RÉPERTOIRES ===
 paths:
@@ -80,6 +80,12 @@ advanced:
 
   # Niveau de verbosité (0=minimal, 1=normal, 2=détaillé)
   verbosity: 2
+
+# === AUGMENTATIONS DE DONNÉES ===
+augmentations:
+  # Activer ou désactiver les augmentations de données pendant l'entraînement
+  # True = appliquer les augmentations sur l'ensemble d'entraînement (val = toujours sans augmentations)
+  enabled: true
 
 # === PARAMÈTRES TRANSFORMER PAR DÉFAUT ===
 # Ces paramètres sont appliqués comme valeurs par défaut si une configuration

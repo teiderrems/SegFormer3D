@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from architectures.build_architecture import build_architecture
+from torchsummary import summary
 
 # Global verbosity level: 'quiet', 'normal', or 'debug' (set by CLI)
 VERBOSITY = 'normal'   # default
@@ -29,6 +30,8 @@ def load_model(checkpoint_path, config):
     """Charge le modèle depuis le checkpoint"""
     # Créer le modèle
     model = build_architecture(config)
+    target_size = config["dataset_parameters"]["train_dataset_args"]["target_size"]
+    summary(model, input_size=(1, target_size, target_size, target_size))
     if VERBOSITY != 'quiet':
         print(f"Modèle créé: {config['model']['name']}")
     if VERBOSITY == 'debug':

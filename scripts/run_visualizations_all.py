@@ -27,8 +27,8 @@ if csv_candidates:
 else:
     TEST_CSV = ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv'
 
-RESULTS_DIR = ROOT / 'results' / 'SegFormer3D'
-VIS_DIR = ROOT / 'visualizations' / 'SegFormer3D'
+RESULTS_DIR = ROOT / 'results'
+VIS_DIR = ROOT / 'visualizations'
 PYTHON = 'python'
 
 
@@ -62,6 +62,46 @@ def read_test_csv(csv_path):
     return patients
 
 
+# Helper function to determine the test CSV path given CLI args and config
+def get_test_csv_from_args_and_config(args, config_path=CONFIG, default=TEST_CSV):
+    """Return a Path to the test.csv to use, following precedence:
+       --test_csv > --test_dir > --test_data_dir > config(test_dataset_args.root/split_file) > auto-detection
+    """
+    # 1) explicit CSV path
+    if getattr(args, 'test_csv', None):
+        p = Path(args.test_csv)
+        return p if p.exists() else None
+
+    # 2) explicit directory containing test.csv
+    if getattr(args, 'test_dir', None):
+        p = Path(args.test_dir) / 'test.csv'
+        return p if p.exists() else None
+
+    # 3) explicit dataset dir argument
+    if getattr(args, 'test_data_dir', None):
+        p = Path(args.test_data_dir) / 'test.csv'
+        return p if p.exists() else None
+
+    # 4) try reading the config YAML for test_dataset_args
+    try:
+        import yaml
+        cfg = yaml.safe_load(open(config_path, 'r', encoding='utf-8')) or {}
+        ds = cfg.get('dataset_parameters', {}).get('test_dataset_args', {})
+        if 'split_file' in ds and ds['split_file']:
+            p = Path(ds['split_file'])
+            if p.exists():
+                return p
+        if 'root' in ds and ds['root']:
+            p = Path(ds['root']) / 'test.csv'
+            if p.exists():
+                return p
+    except Exception:
+        pass
+
+    # 5) fallback automatic detection
+    return default if default.exists() else None
+
+
 def find_prediction_for_patient(patient):
     pdir = RESULTS_DIR / patient
     if not pdir.exists():
@@ -85,7 +125,9 @@ def main():
     parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D (option `--volume_vis`) pour réduire la durée d\'exécution')
     parser.add_argument('--test_csv', type=str, default=None, help='Chemin vers un fichier `test.csv` (prend le pas sur la détection automatique)')
     parser.add_argument('--test_dir', type=str, default=None, help='Chemin vers le répertoire contenant le dataset prétraité (utilise `<dir>/test.csv`)')
-    parser.add_argument('--results_subdir', type=str, default=None, help='Sous-dossier sous results/SegFormer3D contenant les prédictions (ex: best_model, final_model)')
+    parser.add_argument('--test_data_dir', type=str, default=None, help='Répertoire prétraité contenant `test.csv` (prend le pas sur la détection automatique et peut être défini dans la config)')
+    parser.add_argument('--config', type=str, default=None, help='Fichier de configuration YAML à utiliser pour détecter le dataset de test (remplace la valeur par défaut du script)')
+    parser.add_argument('--results_subdir', type=str, default=None, help='Sous-dossier sous results contenant les prédictions (ex: best_model, final_model)')
     parser.add_argument('--vis_tag', type=str, default=None, help='Suffixe pour nommer le dossier de visualisations (ex: best_model, final_model)')
     args = parser.parse_args()
     verbosity = args.verbosity
@@ -95,30 +137,24 @@ def main():
 
     # Configure RESULTS_DIR and VIS_DIR according to optional tags/subdirs
     if args.results_subdir:
-        RESULTS_DIR = ROOT / 'results' / 'SegFormer3D' / args.results_subdir
+        RESULTS_DIR = ROOT / 'results' / args.results_subdir
     else:
-        RESULTS_DIR = ROOT / 'results' / 'SegFormer3D'
+        RESULTS_DIR = ROOT / 'results'
 
     if args.vis_tag:
-        VIS_DIR = ROOT / 'visualizations' / 'SegFormer3D' / args.vis_tag
+        VIS_DIR = ROOT / 'visualizations' / args.vis_tag
     else:
-        VIS_DIR = ROOT / 'visualizations' / 'SegFormer3D'
+        VIS_DIR = ROOT / 'visualizations'
 
     os.makedirs(VIS_DIR, exist_ok=True)
 
-    # Determine which test CSV to use (priority: --test_csv > --test_dir > auto-detected TEST_CSV)
-    if args.test_csv:
-        test_csv = Path(args.test_csv)
-        if not test_csv.exists():
-            print(f"Provided --test_csv does not exist: {test_csv}")
-            return
-    elif args.test_dir:
-        test_csv = Path(args.test_dir) / 'test.csv'
-        if not test_csv.exists():
-            print(f"No test.csv found in provided --test_dir: {args.test_dir}")
-            return
-    else:
-        test_csv = TEST_CSV
+    # Determine which test CSV to use (priority: --test_csv > --test_dir > --test_data_dir > config > auto-detected TEST_CSV)
+    # Respect explicit --config if provided
+    config_path = Path(args.config) if args.config else CONFIG
+    test_csv = get_test_csv_from_args_and_config(args, config_path=config_path, default=TEST_CSV)
+    if test_csv is None:
+        print("No valid test.csv could be determined. Provide --test_csv / --test_dir / --test_data_dir or update the config with test_dataset_args.root or split_file, or pass --config <file>.")
+        return
 
     patients = read_test_csv(test_csv)
     if verbosity != 'quiet':
@@ -146,7 +182,7 @@ def main():
             # fallback: try previous hardcoded path to not break older setups
             input_dir = ROOT / 'data' / 'preprocessed_data_128_128_128' / patient
             if not input_dir.exists():
-                print(f"  Input data not found for {patient} (checked {TEST_CSV.parent} and preprocessed_data_128_128_128). Skipping.")
+                print(f"  Input data not found for {patient} (checked {test_csv.parent} and preprocessed_data_128_128_128). Skipping.")
                 continue
 
         cmd = [PYTHON, str(ROOT / 'visualize_results.py'),

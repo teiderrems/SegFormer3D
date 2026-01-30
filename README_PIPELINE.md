@@ -137,6 +137,58 @@ python pipeline.py \
 
 ```
 
+### Utilisation via Makefile
+
+Le dépôt fournit un `Makefile` pratique pour automatiser les tâches courantes. Deux cibles utiles pour les visualisations :
+
+- `visualize-config` : exécute `scripts/run_visualizations_all.py` en utilisant explicitement un fichier de configuration YAML.
+
+  Exemple :
+
+  ```bash
+  make visualize-config CONFIG=configs/config_segformer3d.yaml RESULTS_SUBDIR=best_model VIS_TAG=best_model
+  ```
+
+- `visualize-test` : exécute les visualisations pour un répertoire prétraité donné (doit contenir `test.csv`).
+
+  Exemple :
+
+  ```bash
+  make visualize-test TEST_DATA_DIR=/path/to/preprocessed_data_240_240_240 RESULTS_SUBDIR=best_model VIS_TAG=best_model
+  ```
+
+Ces cibles facilitent les runs reproductibles et l'intégration dans des scripts CI. Si tu veux, je peux ajouter une cible `make ci-visualize` qui exécute une validation rapide de visualisation dans un environnement CI (nécessite un dataset de test ou un mock).
+
+
+### Comparaison : Exécution avec / sans augmentations
+
+Voici un exemple simple pour comparer deux runs identiques, l’un avec augmentations (comportement par défaut) et l’autre sans augmentations. L’astuce est d’écrire les résultats dans des sous-répertoires distincts pour pouvoir comparer facilement les visualisations et métriques.
+
+1) Run avec augmentations (par défaut) :
+
+```bash
+# Entraînement + inférence (résultats -> results/with_aug)
+python pipeline.py --config pipeline_config.yaml --results_dir ./results/with_aug
+```
+
+2) Run sans augmentations :
+
+```bash
+# Désactiver globalement les augmentations et écrire les résultats séparément
+python pipeline.py --config pipeline_config.yaml --disable_augmentations --results_dir ./results/no_aug
+```
+
+3) Générer les visualisations pour chaque jeu de résultats et comparer :
+
+```bash
+# Visualisations pour le run avec augmentations
+python scripts/run_visualizations_all.py --test_data_dir ./data/preprocessed_data_240_240_240 --results_subdir with_aug --vis_tag with_aug
+
+# Visualisations pour le run sans augmentations
+python scripts/run_visualizations_all.py --test_data_dir ./data/preprocessed_data_240_240_240 --results_subdir no_aug --vis_tag no_aug
+```
+
+4) Comparer les dossiers `visualizations/SegFormer3D/with_aug/` et `visualizations/SegFormer3D/no_aug/` (graphs, `summary_metrics.json`, images comparatives) pour analyser l’effet des augmentations.
 
 
 ### Arguments
@@ -178,6 +230,34 @@ python pipeline.py \
 - `--skip_volume` : Ignorer la visualisation volumétrique 3D pour accélérer la génération des visualisations.
 
 - `--vis_timeout` : Timeout par patient (en secondes) pour la génération de visualisations (par défaut 600 s).
+
+- `--disable_augmentations` : Désactive les augmentations de données pendant l'entraînement (utile pour tests/reproductibilité). Cette option surcharge la valeur `dataset_parameters.*.augmentations` définie dans les configs d'architecture.
+
+**Exécution locale de l'entraînement**
+
+- Le script d'entraînement `train_scripts/trainer_ddp.py` attend le flag `--local_rank` (pas `--local`). Pour lancer l'entraînement local (non-DDP) utilisez :
+
+```bash
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --local_rank 0
+```
+
+- Le `Makefile` fournit la cible `train-local` qui exécute la commande ci-dessus :
+
+```bash
+make train-local
+```
+
+- **Remarque importante** : installez d'abord PyTorch et les dépendances (voir `requirements.txt`) adaptées à votre configuration CUDA/Python :
+
+```bash
+# Exemple (remplacez par la version CUDA pertinente)
+pip install -r requirements.txt
+# ou installez torch explicitement avec la bonne roue CUDA, par ex.:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
+- `--test_data_dir` : Répertoire des données de test (remplace `paths.test_data_dir` dans le fichier de config si fourni). Vous pouvez aussi passer `--test_data_dir` à `scripts/run_visualizations_all.py` (ou `--test_dir`/`--test_csv`) pour contrôler quelles données sont utilisées pour les visualisations.
+- `--config` sur `scripts/run_visualizations_all.py` : permet de fournir explicitement le fichier YAML d'architecture à utiliser pour détecter `test_dataset_args` (ex: `--config configs/config_segformer3d.yaml`).
 
 
 
@@ -331,6 +411,8 @@ La pipeline génère automatiquement les fichiers train.csv et validation.csv (o
 - Entraînement avec les paramètres spécifiés
 
 - Sauvegarde des checkpoints
+
+- **Augmentations** : Par défaut, les augmentations de données sont **activées** pour l'entraînement et **désactivées** pour la validation (contrôlées via `dataset_parameters.*.augmentations` dans les fichiers de config d'architecture). Vous pouvez **désactiver globalement** toutes les augmentations lors d'un run de la pipeline avec l'argument CLI `--disable_augmentations`.
 
 
 
@@ -607,6 +689,40 @@ Les visualisations permettent de :
 - **Valider les métriques quantitatives** avec l'analyse visuelle
 
 
+
+## Tests & CI
+
+- Installer les dépendances de développement :
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+- Lancer la suite de tests :
+
+```bash
+pytest -q
+```
+
+- Suggestion : ajouter un job GitHub Actions simple pour exécuter les tests sur push/PR. Exemple minimal :
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: pytest -q
+```
 
 ## Dépannage
 

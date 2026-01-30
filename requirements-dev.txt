@@ -1,0 +1,3 @@
+# Dépendances pour le développement et les tests
+pytest>=7.0
+pytest-cov>=4.0

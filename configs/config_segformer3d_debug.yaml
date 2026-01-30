@@ -1,0 +1,91 @@
+# Debug configuration for quick run (derived from config_segformer3d.yaml)
+model:
+  name: segformer3d
+  in_channels: 1
+  num_classes: 2
+  embed_dims: [32, 64, 160, 256]
+  sr_ratios: [8, 4, 2, 1]
+  patch_kernel_size: [7, 3, 3, 3]
+  patch_stride: [4, 2, 2, 2]
+  mlp_ratios: [4, 4, 4, 4]
+  num_heads: [1, 2, 5, 8]
+  depths: [2, 2, 2, 2]
+  decoder_head_embedding_dim: 256
+  decoder_dropout: 0.1
+  input_size: [240, 240, 240]
+
+training_parameters:
+  batch_size: 1
+  num_epochs: 1
+  print_every: 10
+  cutoff_epoch: 100
+  calculate_metrics: true
+  checkpoint_save_dir: ./checkpoints
+  learning_rate: 1e-4
+  weight_decay: 1e-5
+  warmup_epochs: 10
+  device: cpu
+
+ema:
+  enabled: false
+  val_ema_every: 10
+
+warmup_scheduler:
+  enabled: true
+  warmup_epochs: 10
+
+sliding_window_inference:
+  roi: [240, 240, 240]
+  sw_batch_size: 1
+
+# Dataset parameters with debug augment enabled
+dataset_parameters:
+  dataset_type: prostate_seg
+  train_dataset_args:
+    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240
+    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/train.csv
+    train: true
+    target_size: 240
+    augmentations: true
+    debug_augment: true
+  val_dataset_args:
+    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240
+    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/validation.csv
+    train: false
+    target_size: 240
+    augmentations: false
+  test_dataset_args:
+    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240
+    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/test.csv
+    train: false
+    target_size: 240
+    augmentations: false
+
+dataloader:
+  batch_size: 1
+  shuffle: true
+  num_workers: 0
+  drop_last: true
+
+optimizer:
+  type: adamw
+  lr: 1e-4
+  weight_decay: 1e-5
+
+scheduler:
+  type: cosine
+  warmup_epochs: 10
+
+loss:
+  type: diceCE
+  dice_weight: 1.0
+  ce_weight: 1.0
+
+metrics:
+  - dice
+  - iou
+
+checkpoint:
+  save_dir: ./checkpoints
+  save_freq: 10
+  keep_last: 5

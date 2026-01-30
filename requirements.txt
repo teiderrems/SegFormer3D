@@ -1,5 +1,6 @@
 numpy>=1.21.0
 torch>=1.12.0
+torch-summary>=1.4.0
 torchvision>=0.13.0
 torchaudio>=0.12.0
 monai>=1.0.0

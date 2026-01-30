@@ -10,7 +10,7 @@ import argparse
 import subprocess
 import pandas as pd
 from pathlib import Path
-from sklearn.model_selection import train_test_split, KFold
+# sklearn import moved into generate_csv_splits_sklearn to avoid hard dependency at module import time
 import random
 import yaml
 
@@ -53,9 +53,14 @@ def load_pipeline_config(config_path):
         'paths': {
             'raw_data_dir': './data/raw_prostate',
             'preprocessed_data_dir': './data/preprocessed_data_128_128_128',
+            'test_data_dir': './data/preprocessed_data_128_128_128',
             'config_dir': './configs',
             'checkpoint_dir': './checkpoints',
             'results_dir': './results'
+        },
+        'augmentations': {
+            # Par défaut les augmentations sont activées (comportement historique)
+            'enabled': True
         },
         'advanced': {
             'skip_preprocess': False,
@@ -156,7 +161,18 @@ def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, v
 
 
 def generate_csv_splits_sklearn(preprocessed_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42):
-    """Méthode fallback utilisant sklearn pour les splits (sans stratification avancée)"""
+    """Méthode fallback utilisant sklearn pour les splits (sans stratification avancée)
+
+    Note: sklearn import is done locally so the module can be imported even when
+    sklearn is not installed (useful for lightweight unit tests).
+    """
+    # Import sklearn locally to avoid hard import-time dependency
+    try:
+        from sklearn.model_selection import train_test_split, KFold
+    except Exception as e:
+        print("sklearn is required for generate_csv_splits_sklearn: ", e)
+        return False
+
     preprocessed_path = Path(preprocessed_dir)
     if not preprocessed_path.exists():
         print(f"Répertoire prétraité non trouvé: {preprocessed_path}")
@@ -383,13 +399,22 @@ def main():
     parser.add_argument('--checkpoints', nargs='*', default=None,
                         help="Liste de checkpoints à inférer (ex: best_model final_model). Si non fourni, utilise la détection automatique")
     parser.add_argument('--visualize', action='store_true', help='Générer visualisations et métriques après inférence')
+    parser.add_argument('--test_data_dir', type=str, help='Répertoire des données de test (remplace la config)')
     parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D pour la génération des visualisations')
     parser.add_argument('--vis_timeout', type=int, default=600, help='Timeout (s) pour chaque visualisation de patient')
+    parser.add_argument('--arch_config', type=str, default=None, help='Fichier de configuration d\'architecture à utiliser au lieu de configs/config_<arch>.yaml')
+
+    # Option pour activer/désactiver les augmentations de données au niveau pipeline
+    parser.add_argument('--disable_augmentations', action='store_true', help='Désactiver les augmentations de données pendant l\'entraînement')
 
     args = parser.parse_args()
 
     # Charger la configuration
     config = load_pipeline_config(args.config)
+
+    # Appliquer l'option CLI d'augmentation (si fournie)
+    if args.disable_augmentations:
+        config['augmentations']['enabled'] = False
 
     # Remplacer les paramètres de configuration par les arguments en ligne de commande
     if args.architectures:
@@ -398,6 +423,8 @@ def main():
         config['paths']['raw_data_dir'] = args.raw_data_dir
     if args.preprocessed_data_dir:
         config['paths']['preprocessed_data_dir'] = args.preprocessed_data_dir
+    if args.test_data_dir:
+        config['paths']['test_data_dir'] = args.test_data_dir
     if args.config_dir:
         config['paths']['config_dir'] = args.config_dir
     if args.checkpoint_dir:
@@ -459,12 +486,42 @@ def main():
                 continue
 
         # 2. Entraînement
-        config_path = Path("configs") / f"config_{arch.lower()}.yaml"
+        # Allow overriding the architecture config via CLI (useful for debug runs)
+        if args.arch_config:
+            config_path = Path(args.arch_config)
+        else:
+            config_path = Path("configs") / f"config_{arch.lower()}.yaml"
+
         if not config_path.exists():
             print(f"Configuration non trouvée: {config_path}")
             continue
 
-        if not train_model(arch, str(config_path)):
+        # Load architecture config (and inject pipeline-level preferences)
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                arch_cfg = yaml.safe_load(f) or {}
+
+            # Assurer l'existence des champs attendus
+            arch_cfg.setdefault('dataset_parameters', {})
+            train_args = arch_cfg['dataset_parameters'].setdefault('train_dataset_args', {})
+            val_args = arch_cfg['dataset_parameters'].setdefault('val_dataset_args', {})
+
+            # Injecter le flag d'augmentations (train: par défaut selon pipeline, val: désactivées)
+            train_args['augmentations'] = bool(config.get('augmentations', {}).get('enabled', True))
+            val_args['augmentations'] = False
+
+            # Écrire dans un fichier temporaire pour éviter d'écraser la config d'origine
+            import tempfile
+            tmp_cfg_file = Path(tempfile.gettempdir()) / f"config_{arch.lower()}_pipeline_tmp.yaml"
+            with open(tmp_cfg_file, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(arch_cfg, f, default_flow_style=False, allow_unicode=True)
+
+            train_cfg_to_use = str(tmp_cfg_file)
+        except Exception as e:
+            print(f"Erreur lors de l'injection des augmentations dans la config: {e}")
+            train_cfg_to_use = str(config_path)
+
+        if not train_model(arch, train_cfg_to_use):
             print(f"Échec de l'entraînement pour {arch}")
             continue
 
@@ -480,7 +537,8 @@ def main():
             # Par défaut on essaie 'best_model' puis 'final_model'
             requested_ckpts = ['best_model', 'final_model']
 
-        test_data_dir = Path(config['paths']['preprocessed_data_dir'])  # Les patients sont directement dans preprocessed_data pour l'inférence
+            # Répertoire des données de test (peut être différent des données prétraitées pour train/val)
+            test_data_dir = Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir']))
         base_results_dir = Path(config['paths']['results_dir']) / arch
 
         any_success_for_arch = False

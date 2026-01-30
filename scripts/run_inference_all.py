@@ -23,14 +23,14 @@ if csv_candidates:
             break
     CSV = preferred.resolve() if preferred else max(csv_candidates, key=lambda p: p.stat().st_mtime).resolve()
 else:
-    CSV = (ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv').resolve()
+    CSV = (ROOT / 'data' /'prostate_preprocessed'/ 'preprocessed_data_240_240_240' / 'test.csv').resolve()
 # Detect checkpoint candidates (prefer repo-level checkpoints/ then SegFormer3D subfolder, try final if best missing)
 candidates = [
     ROOT / 'checkpoints' / 'best_model.pth',
     ROOT / 'checkpoints' / 'final_model.pth',
-    ROOT / 'checkpoints' / 'SegFormer3D' / 'best_model.pth',
-    ROOT / 'checkpoints' / 'SegFormer3D' / 'final_model.pth',
-    ROOT / '..' / 'checkpoints' / 'SegFormer3D' / 'best_model.pth'
+    ROOT / 'checkpoints' / 'best_model.pth',
+    ROOT / 'checkpoints' / 'final_model.pth',
+    ROOT / '..' / 'checkpoints'/ 'best_model.pth'
 ]
 CHECKPOINT = None
 for p in candidates:
@@ -39,7 +39,7 @@ for p in candidates:
         break
 
 CONFIG = (ROOT / 'configs' / 'config_segformer3d.yaml').resolve()
-DEFAULT_RESULTS_DIR = (ROOT / 'results' / 'SegFormer3D').resolve()
+DEFAULT_RESULTS_DIR = (ROOT / 'results').resolve()
 INFER_SCRIPT = (ROOT / 'inference_simple.py').resolve()
 
 # CLI options: verbosity, checkpoint override and tag for results subfolder
