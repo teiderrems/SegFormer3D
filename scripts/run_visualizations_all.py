@@ -5,12 +5,12 @@ Skips patients already having <patient>_errors.json in the visualizations direct
 """
 import csv
 import argparse
+import sys
 from tqdm import tqdm
 import os
 import subprocess
 import time
 from pathlib import Path
-import os
 import concurrent.futures
 
 ROOT = Path(os.path.realpath(os.getcwd()))
@@ -31,7 +31,7 @@ else:
 
 RESULTS_DIR = ROOT / 'results'
 VIS_DIR = ROOT / 'visualizations'
-PYTHON = 'python'
+PYTHON = sys.executable
 
 
 def read_test_csv(csv_path):
