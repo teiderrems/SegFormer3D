@@ -1170,6 +1170,12 @@ def main():
         default=-1,
         help="Local rank for distributed training"
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to a checkpoint (.pth) for fine-tuning / resume training"
+    )
     args = parser.parse_args()
     
     # Load config
@@ -1246,6 +1252,24 @@ def main():
     model = build_architecture(config)
     num_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Modèle construit ({num_params:,} paramètres)")
+    
+    # ── Chargement du checkpoint pour fine-tuning ──
+    if args.checkpoint:
+        ckpt_path = Path(args.checkpoint)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Checkpoint introuvable: {ckpt_path}")
+        log_section(logger, "FINE-TUNING")
+        logger.info(f"Chargement du checkpoint: {ckpt_path}")
+        checkpoint_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        if "model_state_dict" in checkpoint_data:
+            model.load_state_dict(checkpoint_data["model_state_dict"])
+            logger.info(f"Poids du modèle chargés (epoch {checkpoint_data.get('epoch', '?')}, "
+                        f"dice={checkpoint_data.get('val_dice', checkpoint_data.get('best_val_dice', '?'))})")
+        else:
+            # Cas où le fichier contient directement le state_dict
+            model.load_state_dict(checkpoint_data)
+            logger.info("Poids du modèle chargés (state_dict direct)")
+        logger.info("Fine-tuning: l'optimiseur et le scheduler repartent de zéro")
     
     # Build datasets and dataloaders
     from dataloaders.build_dataset import build_dataloaders
