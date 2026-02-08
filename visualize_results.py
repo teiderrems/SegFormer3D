@@ -18,8 +18,12 @@ from scipy.spatial import cKDTree
 from scipy import ndimage
 from skimage.metrics import structural_similarity as ssim
 
-# Global verbosity level: 'quiet', 'normal', or 'debug' (set by CLI)
-VERBOSITY = 'normal'   # default
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from train_scripts.logger import get_logger
+
+# Logger de visualisation (configuré dans main)
+vis_logger = get_logger("visualize", level="INFO")
 
 def load_config(config_path):
     """Charge la configuration YAML"""
@@ -126,8 +130,7 @@ def create_comparison_visualization(prediction, modalities, labels, output_dir, 
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    if VERBOSITY != 'quiet':
-        print(f"Visualisation sauvegardée: {output_path}")
+    vis_logger.info(f"Visualisation sauvegardée: {output_path}")
 
 def create_detailed_slices(prediction, modalities, labels, output_dir, patient_name):
     """Crée des visualisations détaillées de différentes coupes"""
@@ -161,8 +164,7 @@ def create_detailed_slices(prediction, modalities, labels, output_dir, patient_n
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    if VERBOSITY != 'quiet':
-        print(f"Coupes axiales sauvegardées: {output_path}")
+    vis_logger.info(f"Coupes axiales sauvegardées: {output_path}")
 
 def create_statistics_plot(prediction, labels, output_dir, patient_name):
     """Crée un graphique des statistiques de classification"""
@@ -220,8 +222,7 @@ def create_statistics_plot(prediction, labels, output_dir, patient_name):
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    if VERBOSITY != 'quiet':
-        print(f"Statistiques sauvegardées: {output_path}")
+    vis_logger.info(f"Statistiques sauvegardées: {output_path}")
 
 import json
 
@@ -393,9 +394,8 @@ def create_error_visualizations(prediction, modalities, labels, output_dir, pati
         af.write('Reason: memory/performance constraints for large volumes (e.g., 240^3).\n')
         af.write('To re-enable, adjust visualization settings or enable computation in code.\n')
 
-    if VERBOSITY != 'quiet':
-        print(f"Métriques sauvegardées: {json_path}")
-        print(f"Résumé avancé sauvegardé: {advanced_txt}")
+    vis_logger.info(f"Métriques sauvegardées: {json_path}")
+    vis_logger.info(f"Résumé avancé sauvegardé: {advanced_txt}")
     # Graphique des métriques (Dice / IoU par classe)
     class_keys = [k for k in metrics.keys() if k.startswith('class_')]
     class_keys_sorted = sorted(class_keys, key=lambda x: int(x.split('_')[1]))
@@ -454,9 +454,8 @@ def create_error_visualizations(prediction, modalities, labels, output_dir, pati
     plt.savefig(overlay_png, dpi=300, bbox_inches='tight')
     plt.close()
 
-    if VERBOSITY != 'quiet':
-        print(f"Métriques sauvegardées: {json_path}")
-        print(f"Graphiques d'erreurs sauvegardés: {metrics_png}, {slice_png}, {overlay_png}")
+    vis_logger.info(f"Métriques sauvegardées: {json_path}")
+    vis_logger.info(f"Graphiques d'erreurs sauvegardés: {metrics_png}, {slice_png}, {overlay_png}")
 
 
 def create_volume_visualization(prediction, modalities, labels, output_dir, patient_name, interactive=False):
@@ -557,8 +556,7 @@ def create_volume_visualization(prediction, modalities, labels, output_dir, pati
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
 
-    if VERBOSITY != 'quiet':
-        print(f"Visualisation volumétrique sauvegardée: {output_path}")
+    vis_logger.info(f"Visualisation volumétrique sauvegardée: {output_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="Visualisation des résultats d'inférence SegFormer3D")
@@ -574,26 +572,27 @@ def main():
 
     args = parser.parse_args()
 
-    # Set global verbosity
-    global VERBOSITY
-    VERBOSITY = args.verbosity
+    # Configurer le logger de visualisation
+    global vis_logger
+    level_map = {'quiet': 'WARNING', 'normal': 'INFO', 'debug': 'DEBUG'}
+    vis_logger = get_logger(
+        "visualize",
+        level=level_map.get(args.verbosity, 'INFO'),
+    )
 
     # Charger la configuration
     config = load_config(args.config)
     patient_name = os.path.basename(args.input_dir)
 
-    if VERBOSITY != 'quiet':
-        print(" Génération des visualisations...")
-        print(f"Patient: {patient_name}")
-        print(f"Modèle: {config['model']['name']}")
+    vis_logger.info("Génération des visualisations...")
+    vis_logger.info(f"Patient: {patient_name}")
+    vis_logger.info(f"Modèle: {config['model']['name']}")
 
     # Charger les données
     prediction, modalities, labels = load_prediction_and_data(args.prediction, args.input_dir)
-    if VERBOSITY != 'quiet':
-        print(f"Données chargées - Prédiction: {prediction.shape}, Image: {modalities.shape}, Labels: {labels.shape}")
-    if VERBOSITY == 'debug':
-        print(f"[debug] prediction dtype={prediction.dtype}, unique={np.unique(prediction)}")
-        print(f"[debug] modalities dtype={modalities.dtype}, min={modalities.min()}, max={modalities.max()}")
+    vis_logger.info(f"Données chargées - Prédiction: {prediction.shape}, Image: {modalities.shape}, Labels: {labels.shape}")
+    vis_logger.debug(f"prediction dtype={prediction.dtype}, unique={np.unique(prediction)}")
+    vis_logger.debug(f"modalities dtype={modalities.dtype}, min={modalities.min()}, max={modalities.max()}")
 
     # Parser le spacing si fourni
     voxel_spacing = None
@@ -604,51 +603,42 @@ def main():
                 raise ValueError('voxel_spacing must have three comma-separated values: sx,sy,sz')
             voxel_spacing = (parts[0], parts[1], parts[2])
         except Exception as e:
-            print(f"Warning: impossible de parser --voxel_spacing: {e}. Ignorer le spacing.")
+            vis_logger.warning(f"Impossible de parser --voxel_spacing: {e}. Ignorer le spacing.")
             voxel_spacing = None
 
-    # Créer les visualisations (mesures en mode debug)
-    if VERBOSITY == 'debug':
+    # Créer les visualisations
+    import time
+    t0 = time.time()
+    create_comparison_visualization(prediction, modalities, labels, args.output_dir, patient_name)
+    vis_logger.debug(f"Visualisation comparaison: {time.time() - t0:.3f}s")
+
+    t0 = time.time()
+    create_detailed_slices(prediction, modalities, labels, args.output_dir, patient_name)
+    vis_logger.debug(f"Coupes détaillées: {time.time() - t0:.3f}s")
+
+    t0 = time.time()
+    create_statistics_plot(prediction, labels, args.output_dir, patient_name)
+    vis_logger.debug(f"Graphique statistiques: {time.time() - t0:.3f}s")
+
+    if args.compute_errors:
         t0 = time.time()
-        create_comparison_visualization(prediction, modalities, labels, args.output_dir, patient_name)
-        print(f"[debug] comparison visualization time: {time.time() - t0:.3f}s")
+        create_error_visualizations(prediction, modalities, labels, args.output_dir, patient_name, spacing=voxel_spacing)
+        vis_logger.debug(f"Visualisations d'erreurs: {time.time() - t0:.3f}s")
 
+    if args.volume_vis or args.interactive:
         t0 = time.time()
-        create_detailed_slices(prediction, modalities, labels, args.output_dir, patient_name)
-        print(f"[debug] detailed slices time: {time.time() - t0:.3f}s")
+        create_volume_visualization(prediction, modalities, labels, args.output_dir, patient_name, interactive=args.interactive)
+        vis_logger.debug(f"Visualisation volumique: {time.time() - t0:.3f}s")
 
-        t0 = time.time()
-        create_statistics_plot(prediction, labels, args.output_dir, patient_name)
-        print(f"[debug] statistics plot time: {time.time() - t0:.3f}s")
+    vis_logger.info("Visualisations terminées !")
+    vis_logger.info(f"Fichiers sauvegardés dans: {args.output_dir}/")
 
-        if args.compute_errors:
-            t0 = time.time()
-            create_error_visualizations(prediction, modalities, labels, args.output_dir, patient_name, spacing=voxel_spacing)
-            print(f"[debug] error visualizations time: {time.time() - t0:.3f}s")
-
-        if args.volume_vis or args.interactive:
-            t0 = time.time()
-            create_volume_visualization(prediction, modalities, labels, args.output_dir, patient_name, interactive=args.interactive)
-            print(f"[debug] volume visualization time: {time.time() - t0:.3f}s")
-    else:
-        create_comparison_visualization(prediction, modalities, labels, args.output_dir, patient_name)
-        create_detailed_slices(prediction, modalities, labels, args.output_dir, patient_name)
-        create_statistics_plot(prediction, labels, args.output_dir, patient_name)
-        if args.compute_errors:
-            create_error_visualizations(prediction, modalities, labels, args.output_dir, patient_name, spacing=voxel_spacing)
-        if args.volume_vis or args.interactive:
-            create_volume_visualization(prediction, modalities, labels, args.output_dir, patient_name, interactive=args.interactive)
-
-    if VERBOSITY != 'quiet':
-        print("\n Visualisations terminées !")
-        print(f" Fichiers sauvegardés dans: {args.output_dir}/")
-
-        # Lister les fichiers générés
-        if os.path.exists(args.output_dir):
-            files = os.listdir(args.output_dir)
-            print(" Fichiers générés:")
-            for file in sorted(files):
-                print(f"   - {file}")
+    # Lister les fichiers générés
+    if os.path.exists(args.output_dir):
+        files = sorted(os.listdir(args.output_dir))
+        vis_logger.info(f"Fichiers générés ({len(files)}):")
+        for f in files:
+            vis_logger.info(f"  - {f}")
 
 if __name__ == "__main__":
     main()

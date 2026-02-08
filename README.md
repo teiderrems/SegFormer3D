@@ -214,6 +214,39 @@ Options utiles :
 
 ```
 
+## Inférence sur les datasets de test avec les checkpoints best_model et final_model
+
+Pour effectuer l'inférence sur les datasets de test en utilisant les checkpoints `best_model` et `final_model` :
+
+```bash
+# Inférence avec le checkpoint best_model
+python pipeline.py --checkpoints best_model
+
+# Inférence avec le checkpoint final_model
+python pipeline.py --checkpoints final_model
+
+# Inférence avec les deux checkpoints
+python pipeline.py --checkpoints best_model final_model
+```
+
+Les résultats seront sauvegardés dans `results/SegFormer3D/best_model/` et `results/SegFormer3D/final_model/` respectivement.
+
+## Visualisation des résultats de l'inférence avec calcul des métriques
+
+Après l'inférence, pour visualiser les résultats et calculer les métriques :
+
+```bash
+# Visualisation pour best_model
+python scripts/run_visualizations_all.py --results_subdir best_model --vis_tag best_model --verbosity normal
+
+# Visualisation pour final_model
+python scripts/run_visualizations_all.py --results_subdir final_model --vis_tag final_model --verbosity normal
+```
+
+Les visualisations incluront les métriques de segmentation (Dice, IoU, précision, rappel) et des images comparatives pour chaque patient du dataset de test.
+
+```
+
 
 
 ##  Configuration

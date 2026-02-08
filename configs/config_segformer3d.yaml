@@ -12,12 +12,12 @@ model:
   depths: [2, 2, 2, 2]            # Profondeur par couche
   decoder_head_embedding_dim: 256 # Dimension du décodeur
   decoder_dropout: 0.1            # Dropout du décodeur
-  input_size: [240, 240, 240]        # Dimensions d'entrée du modèle
+  input_size: [128, 128, 128]        # Dimensions d'entrée du modèle
 
 # Configuration de l'entraînement
 training_parameters:
   batch_size: 1                   # Taille du batch d'entraînement
-  num_epochs: 20                 # Nombre total d'époques
+  num_epochs: 40                 # Nombre total d'époques
   print_every: 10                 # Fréquence d'impression des logs
   cutoff_epoch: 100               # Époque de cutoff (non utilisé)
   calculate_metrics: true         # Calculer les métriques
@@ -39,33 +39,33 @@ warmup_scheduler:
 
 # Configuration de l'inférence par fenêtre glissante
 sliding_window_inference:
-  roi: [240, 240, 240]               # Région d'intérêt pour l'inférence
+  roi: [128, 128, 128]               # Région d'intérêt pour l'inférence
   sw_batch_size: 1                # Taille du batch pour l'inférence
 
 # Configuration des données
 dataset_parameters:
   dataset_type: prostate_seg      # Type de dataset utilisé
   train_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240   # Chemin vers les données d'entraînement
-    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/train.csv  # Fichier de split d'entraînement
+    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128   # Chemin vers les données d'entraînement
+    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/train.csv  # Fichier de split d'entraînement
     train: true                   # Mode entraînement
-    target_size: 240               # Taille cible des volumes
+    target_size: 128               # Taille cible des volumes
     # Activer les augmentations pour l'entraînement (sera surchargé par la pipeline si besoin)
     augmentations: true
     # Mode debug: imprime pour les 5 premiers samples si les augmentations modifient l'image/label
     debug_augment: false
   val_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240      # Chemin vers les données de validation
-    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/validation.csv    # Fichier de split de validation
+    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128      # Chemin vers les données de validation
+    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/validation.csv    # Fichier de split de validation
     train: false                  # Mode validation
-    target_size: 240               # Taille cible des volumes
+    target_size: 128               # Taille cible des volumes
     # Par défaut on n'applique pas d'augmentations en validation
     augmentations: false
   test_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240      # Chemin vers les données de test
-    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/test.csv    # Fichier de split de test
+    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128      # Chemin vers les données de test
+    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/test.csv    # Fichier de split de test
     train: false                  # Mode test
-    target_size: 240               # Taille cible des volumes
+    target_size: 128               # Taille cible des volumes
     augmentations: false
 
 # Configuration des dataloaders
@@ -99,6 +99,10 @@ metrics:
 
 # Configuration de sauvegarde des checkpoints
 checkpoint:
-  save_dir: ./checkpoints  # Répertoire de sauvegarde
-  save_freq: 10                  # Fréquence de sauvegarde (toutes les 10 époques)
-  keep_last: 5                   # Nombre de checkpoints à conserver
+  save_dir: ./checkpoints          # Répertoire de sauvegarde
+  save_freq: 10                    # Fréquence de sauvegarde périodique (toutes les N époques, 0 = désactivé)
+  keep_last: 5                     # Nombre de checkpoints périodiques à conserver (rotation automatique)
+  # Fichiers générés :
+  #   - best_model.pth                         : meilleur modèle (dice ou val_loss) avec métadonnées
+  #   - final_model.pth                        : modèle en fin d'entraînement avec métadonnées
+  #   - periodic_checkpoints/checkpoint_epoch_XXXX.pth : checkpoints périodiques

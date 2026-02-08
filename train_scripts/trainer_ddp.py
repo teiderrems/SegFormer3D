@@ -22,8 +22,12 @@ warnings.filterwarnings("ignore", message="Using a non-tuple sequence for multid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from metrics.segmentation_metrics import SlidingWindowInference
+from train_scripts.training_visualizer import TrainingVisualizer
+from train_scripts.logger import (
+    get_logger, log_epoch_summary, log_training_start,
+    log_training_end, log_section, KerasProgressBar,
+)
 import kornia
-from torchsummary import summary
 
 
 #################################################################################################
@@ -60,7 +64,6 @@ class Segmentation_Trainer:
         # model components
         self.model = model
         target_size = config["dataset_parameters"]["train_dataset_args"]["target_size"]
-        summary(self.model, input_size=(1, target_size, target_size, target_size))
         self.optimizer = optimizer
         self.criterion = criterion
         self.train_dataloader = train_dataloader
@@ -93,6 +96,7 @@ class Segmentation_Trainer:
         self.sliding_window_inference = SlidingWindowInference(
             config["sliding_window_inference"]["roi"],
             config["sliding_window_inference"]["sw_batch_size"],
+            num_classes=config.get("model", {}).get("num_classes", 2),
         )
 
         # training scheduler
@@ -105,6 +109,20 @@ class Segmentation_Trainer:
         self.ema_model = self._create_ema_model() if self.ema_enabled else None
         self.epoch_val_ema_dice = 0.0
         self.best_val_ema_dice = 0.0
+
+        # ── Visualiseur de métriques d'entraînement ──
+        self.visualizer = TrainingVisualizer(
+            save_dir=self.checkpoint_save_dir,
+            experiment_name=config.get("model", {}).get("name", "SegFormer3D"),
+        )
+
+        # ── Logger unifié ──
+        log_file = os.path.join(self.checkpoint_save_dir, "training.log")
+        self.logger = get_logger(
+            "trainer",
+            level="DEBUG" if config.get("advanced", {}).get("verbosity", 1) > 1 else "INFO",
+            log_file=log_file,
+        )
 
     def _configure_trainer(self) -> None:
         """
@@ -122,11 +140,17 @@ class Segmentation_Trainer:
             "checkpoint_save_dir"
         ]
 
+        # ── Configuration des checkpoints périodiques ──
+        ckpt_cfg = self.config.get("checkpoint", {})
+        self.checkpoint_save_freq = ckpt_cfg.get("save_freq", 0)  # 0 = désactivé
+        self.checkpoint_keep_last = ckpt_cfg.get("keep_last", 5)
+        self._saved_checkpoints: list = []  # liste des chemins pour la rotation
+
     def _load_checkpoint(self):
         raise NotImplementedError
 
     def _create_ema_model(self) -> torch.nn.Module:
-        self.accelerator.print(f"[info] -- creating ema model")
+        self.accelerator.print("Création du modèle EMA")
         ema_model = torch.optim.swa_utils.AveragedModel(
             self.model,
             device=self.accelerator.device,
@@ -226,15 +250,15 @@ class Segmentation_Trainer:
         # set epoch to shift data order each epoch
         # self.val_dataloader.sampler.set_epoch(self.current_epoch)
         with torch.no_grad():
-            # Barre de progression pour la validation
-            pbar = tqdm(
-                enumerate(self.val_dataloader),
+            # Barre de progression style Keras pour la validation
+            pbar = KerasProgressBar(
                 total=len(self.val_dataloader),
-                desc=f"Validation Epoch {self.current_epoch + 1}/{self.num_epochs}",
-                leave=True,
-                disable=not self.accelerator.is_main_process
+                epoch=self.current_epoch,
+                num_epochs=self.num_epochs,
+                prefix="Val",
+                enabled=self.accelerator.is_main_process,
             )
-            for index, (raw_data) in pbar:
+            for index, (raw_data) in enumerate(self.val_dataloader):
                 # get data ex: (data, target)
                 data, labels = (
                     raw_data["image"],
@@ -258,6 +282,13 @@ class Segmentation_Trainer:
                 # update loss for the current batch
                 epoch_avg_loss += loss.detach().item()
 
+                # Mise à jour barre de validation
+                avg_val_loss = epoch_avg_loss / (index + 1)
+                val_metrics = {'val_loss': avg_val_loss}
+                if self.calculate_metrics and total_dice > 0:
+                    val_metrics['dice'] = total_dice / (index + 1)
+                pbar.update(index + 1, val_metrics)
+
                 # Free up memory periodically during validation
                 if index % 10 == 0 and torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -268,6 +299,13 @@ class Segmentation_Trainer:
             self.epoch_val_dice = total_dice / float(index + 1)
 
         epoch_avg_loss = epoch_avg_loss / float(index + 1)
+
+        # Finaliser la barre de validation
+        final_metrics = {'val_loss': epoch_avg_loss}
+        if self.calculate_metrics:
+            dice_val = self.epoch_val_ema_dice if use_ema else self.epoch_val_dice
+            final_metrics['dice'] = dice_val
+        pbar.finish(final_metrics)
 
         return epoch_avg_loss
 
@@ -305,10 +343,19 @@ class Segmentation_Trainer:
                         self.model, self.criterion, log="all", log_freq=10, log_graph=True
                     )
             except Exception as e:
-                self.accelerator.print(f"[warning] -- could not watch model on wandb: {e}")
+                self.logger.warning(f"Impossible de connecter wandb: {e}")
+
+        # Afficher bannière de démarrage
+        if self.accelerator.is_main_process:
+            num_params = sum(p.numel() for p in self.model.parameters())
+            log_training_start(
+                self.logger, self.config,
+                model_name=self.config.get("model", {}).get("name", "?"),
+                num_params=num_params,
+            )
 
         # Run Training and Validation
-        for epoch in tqdm(range(self.num_epochs)):
+        for epoch in range(self.num_epochs):
             # update epoch
             self.current_epoch = epoch
             self._update_scheduler()
@@ -333,6 +380,20 @@ class Segmentation_Trainer:
             # save and print
             self._save_and_print()
 
+            # ── Sauvegarde périodique du checkpoint ──
+            self._save_periodic_checkpoint()
+
+            # ── Mise à jour de la visualisation ──
+            if self.accelerator.is_main_process:
+                current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else 0.0
+                self.visualizer.update(
+                    epoch=epoch,
+                    train_loss=self.epoch_train_loss,
+                    val_loss=self.epoch_val_loss,
+                    val_dice=self.epoch_val_dice,
+                    learning_rate=current_lr,
+                )
+
             # update schduler
             self.scheduler.step()
             
@@ -342,41 +403,41 @@ class Segmentation_Trainer:
             
             # Early stopping check
             if self.early_stop:
-                self.accelerator.print(
-                    colored(f"\n[info] -- Early stopping triggered after {self.current_epoch + 1} epochs\n", color="yellow")
+                self.logger.warning(
+                    f"Early stopping déclenché après {self.current_epoch + 1} époques"
                 )
                 break
         
         # Sauvegarde finale du modèle à la fin de l'entraînement
         self._save_final_model()
 
+        # ── Graphiques et résumé final ──
+        if self.accelerator.is_main_process:
+            summary_text = self.visualizer.finalize()
+            self.logger.info(summary_text)
+            log_training_end(
+                self.logger,
+                total_epochs=self.current_epoch + 1,
+                best_val_dice=self.best_val_dice,
+                best_val_loss=self.best_val_loss,
+                checkpoint_dir=self.checkpoint_save_dir,
+            )
+
     def _update_scheduler(self) -> None:
-        """_summary_"""
+        """Met à jour le scheduler (warmup -> training)."""
         if self.warmup_enabled:
             if self.current_epoch == 0:
-                self.accelerator.print(
-                    colored(f"\n[info] -- warming up learning rate \n", color="red")
-                )
+                self.logger.info("Démarrage phase de warmup du learning rate")
                 self.scheduler = self.warmup_scheduler
             elif self.current_epoch == self.warmup_epochs:
-                self.accelerator.print(
-                    colored(
-                        f"\n[info] -- switching to learning rate decay schedule \n",
-                        color="red",
-                    )
-                )
+                self.logger.info("Transition vers le scheduler de décroissance du LR")
                 self.scheduler = self.training_scheduler
         elif self.current_epoch == 0:
-            self.accelerator.print(
-                colored(
-                    f"\n[info] -- setting learning rate decay schedule \n",
-                    color="red",
-                )
-            )
+            self.logger.info("Activation du scheduler de décroissance du LR")
             self.scheduler = self.training_scheduler
 
     def _update_metrics(self) -> None:
-        """_summary_"""
+        """Met à jour les meilleures métriques enregistrées."""
         # update training loss
         if self.epoch_train_loss <= self.best_train_loss:
             self.best_train_loss = self.epoch_train_loss
@@ -390,7 +451,7 @@ class Segmentation_Trainer:
                 self.best_val_dice = self.epoch_val_dice
 
     def _log_metrics(self) -> None:
-        """_summary_"""
+        """Log les métriques vers wandb et le logger unifié."""
         # data to be logged
         log_data = {
             "epoch": self.current_epoch,
@@ -435,40 +496,52 @@ class Segmentation_Trainer:
             # Sauvegarder aussi le modèle seul en format simple
             self._save_best_model()
 
-            self.accelerator.print(
-                f"epoch -- {colored(str(self.current_epoch + 1).zfill(4), color='green')} || "
-                f"train loss -- {colored(f'{self.epoch_train_loss:.5f}', color='green')} || "
-                f"val loss -- {colored(f'{self.epoch_val_loss:.5f}', color='green')} || "
-                f"lr -- {colored(f'{self.scheduler.get_last_lr()[0]:.8f}', color='green')} || "
-                f"val mean_dice -- {colored(f'{self.epoch_val_dice:.5f}', color='green')} -- saved "
-            )
         else:
             # Increment early stopping counter
             self.early_stopping_counter += 1
             
-            self.accelerator.print(
-                f"epoch -- {str(self.current_epoch + 1).zfill(4)} || "
-                f"train loss -- {self.epoch_train_loss:.5f} || "
-                f"val loss -- {self.epoch_val_loss:.5f} || "
-                f"lr -- {self.scheduler.get_last_lr()[0]:.8f} || "
-                f"val mean_dice -- {self.epoch_val_dice:.5f}"
-            )
-            
             # Check early stopping
             if self.early_stopping_patience > 0 and self.early_stopping_counter >= self.early_stopping_patience:
                 self.early_stop = True
+
+        # ── Affichage unifié via le logger ──
+        if self.accelerator.is_main_process:
+            current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else 0.0
+            log_epoch_summary(
+                self.logger,
+                epoch=self.current_epoch,
+                train_loss=self.epoch_train_loss,
+                val_loss=self.epoch_val_loss,
+                val_dice=self.epoch_val_dice,
+                lr=current_lr,
+                is_best=is_best,
+                early_stop_counter=self.early_stopping_counter,
+                early_stop_patience=self.early_stopping_patience,
+            )
     
     def _save_best_model(self) -> None:
-        """Sauvegarde le meilleur modèle en format simple (state_dict uniquement)."""
+        """Sauvegarde le meilleur modèle avec métadonnées complètes."""
         if self.accelerator.is_main_process:
             best_model_path = os.path.join(self.checkpoint_save_dir, "best_model.pth")
             os.makedirs(self.checkpoint_save_dir, exist_ok=True)
-            
-            # Obtenir le modèle unwrapped
+
             unwrapped_model = self.accelerator.unwrap_model(self.model)
-            torch.save(unwrapped_model.state_dict(), best_model_path)
-            
-            # Sauvegarder aussi les infos d'entraînement
+            checkpoint = {
+                "epoch": self.current_epoch + 1,
+                "model_state_dict": unwrapped_model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "train_loss": self.epoch_train_loss,
+                "val_loss": self.epoch_val_loss,
+                "val_dice": self.epoch_val_dice,
+                "best_val_dice": self.best_val_dice,
+                "best_val_loss": self.best_val_loss,
+                "config": self.config,
+            }
+            if self.scheduler is not None:
+                checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
+            torch.save(checkpoint, best_model_path)
+
+            # Sauvegarder aussi les infos lisibles
             info_path = os.path.join(self.checkpoint_save_dir, "best_model_info.txt")
             with open(info_path, 'w') as f:
                 f.write(f"Epoch: {self.current_epoch + 1}\n")
@@ -476,21 +549,94 @@ class Segmentation_Trainer:
                 f.write(f"Val Loss: {self.epoch_val_loss:.6f}\n")
                 f.write(f"Val Dice: {self.epoch_val_dice:.6f}\n")
                 f.write(f"Best Dice: {self.best_val_dice:.6f}\n")
+
+            self.logger.info(
+                f"Meilleur modèle sauvegardé → {best_model_path} "
+                f"(epoch {self.current_epoch + 1}, dice={self.epoch_val_dice:.2f}%)"
+            )
+
+    def _save_periodic_checkpoint(self) -> None:
+        """Sauvegarde un checkpoint complet toutes les `save_freq` époques.
+
+        Les checkpoints sont numérotés et une rotation est appliquée pour
+        ne conserver que les `keep_last` plus récents.
+        """
+        if self.checkpoint_save_freq <= 0:
+            return  # fonctionnalité désactivée
+
+        # Sauvegarder uniquement aux époques multiples de save_freq
+        epoch_1based = self.current_epoch + 1
+        if epoch_1based % self.checkpoint_save_freq != 0:
+            return
+
+        if not self.accelerator.is_main_process:
+            return
+
+        ckpt_dir = os.path.join(self.checkpoint_save_dir, "periodic_checkpoints")
+        os.makedirs(ckpt_dir, exist_ok=True)
+
+        ckpt_name = f"checkpoint_epoch_{epoch_1based:04d}.pth"
+        ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        checkpoint = {
+            "epoch": epoch_1based,
+            "model_state_dict": unwrapped_model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "train_loss": self.epoch_train_loss,
+            "val_loss": self.epoch_val_loss,
+            "val_dice": self.epoch_val_dice,
+            "best_val_dice": self.best_val_dice,
+            "best_val_loss": self.best_val_loss,
+            "config": self.config,
+        }
+        if self.scheduler is not None:
+            checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
+
+        torch.save(checkpoint, ckpt_path)
+        self._saved_checkpoints.append(ckpt_path)
+
+        self.logger.info(
+            f"Checkpoint périodique sauvegardé → {ckpt_name}"
+        )
+
+        # ── Rotation : supprimer les checkpoints les plus anciens ──
+        if self.checkpoint_keep_last > 0:
+            while len(self._saved_checkpoints) > self.checkpoint_keep_last:
+                old_path = self._saved_checkpoints.pop(0)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+                    self.logger.debug(
+                        f"Ancien checkpoint supprimé: {os.path.basename(old_path)}"
+                    )
     
     def _save_final_model(self) -> None:
-        """Sauvegarde le modèle final à la fin de l'entraînement."""
+        """Sauvegarde le modèle final avec métadonnées complètes."""
         if self.accelerator.is_main_process:
             final_model_path = os.path.join(self.checkpoint_save_dir, "final_model.pth")
             os.makedirs(self.checkpoint_save_dir, exist_ok=True)
-            
+
             unwrapped_model = self.accelerator.unwrap_model(self.model)
-            torch.save(unwrapped_model.state_dict(), final_model_path)
-            
-            self.accelerator.print(
-                colored(f"\n[info] -- Modèle final sauvegardé: {final_model_path}", color="green")
-            )
-            self.accelerator.print(
-                colored(f"[info] -- Meilleur Dice: {self.best_val_dice:.5f}", color="green")
+            checkpoint = {
+                "epoch": self.current_epoch + 1,
+                "model_state_dict": unwrapped_model.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "train_loss": self.epoch_train_loss,
+                "val_loss": self.epoch_val_loss,
+                "val_dice": self.epoch_val_dice,
+                "best_val_dice": self.best_val_dice,
+                "best_val_loss": self.best_val_loss,
+                "config": self.config,
+            }
+            if self.scheduler is not None:
+                checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
+            torch.save(checkpoint, final_model_path)
+
+            self.logger.info(f"Modèle final sauvegardé: {final_model_path}")
+            self.logger.info(
+                f"Époques: {self.current_epoch + 1} | "
+                f"Meilleur Dice: {self.best_val_dice:.2f}% | "
+                f"Meilleure Val Loss: {self.best_val_loss:.6f}"
             )
 
     def _save_checkpoint(self, filename: str) -> None:
@@ -518,9 +664,9 @@ class Segmentation_Trainer:
         if self.ema_enabled and (self.current_epoch % self.val_ema_every == 0):
             self.val_ema_model = self._update_ema_bn(duplicate_model=False)
             _ = self._val_step(use_ema=True)
-            self.accelerator.print(
-                f"[info] -- gpu id: {self.accelerator.device} -- "
-                f"ema val dice: {colored(f'{self.epoch_val_ema_dice:.5f}', color='red')}"
+            self.logger.info(
+                f"EMA val dice: {self.epoch_val_ema_dice:.2f}% "
+                f"(device: {self.accelerator.device})"
             )
 
         if self.epoch_val_ema_dice > self.best_val_ema_dice:
@@ -543,10 +689,7 @@ class Segmentation_Trainer:
             _type_: _description_
         """
         # update batch norm stats for ema model after training
-        # TODO: test ema functionality
-        self.accelerator.print(
-            colored("[info] -- updating ema batch norm stats", color="red")
-        )
+        self.logger.info("Mise à jour des stats BatchNorm pour le modèle EMA")
         if duplicate_model:
             temp_ema_model = deepcopy(self.ema_model).to(
                 self.accelerator.device
@@ -679,18 +822,18 @@ class AutoEncoder_Trainer:
         # set model to train
         self.model.train()
 
-        # Barre de progression avec tqdm
-        pbar = tqdm(
-            enumerate(self.train_dataloader),
+        # Barre de progression style Keras
+        pbar = KerasProgressBar(
             total=len(self.train_dataloader),
-            desc=f"Epoch {self.current_epoch + 1}/{self.num_epochs}",
-            leave=True,
-            disable=not self.accelerator.is_main_process
+            epoch=self.current_epoch,
+            num_epochs=self.num_epochs,
+            enabled=self.accelerator.is_main_process,
         )
+        pbar.epoch_header()
 
         # set epoch to shift data order each epoch
         # self.train_dataloader.sampler.set_epoch(self.current_epoch)
-        for index, raw_data in pbar:
+        for index, raw_data in enumerate(self.train_dataloader):
             # add in gradient accumulation
             # TODO: test gradient accumulation
             with self.accelerator.accumulate(self.model):
@@ -725,12 +868,13 @@ class AutoEncoder_Trainer:
 
                 # Mise à jour de la barre de progression
                 avg_loss = epoch_avg_loss / (index + 1)
-                pbar.set_postfix({
-                    'loss': f'{avg_loss:.4f}',
-                    'lr': f'{self.scheduler.get_last_lr()[0]:.2e}'
+                pbar.update(index + 1, {
+                    'loss': avg_loss,
+                    'lr': self.scheduler.get_last_lr()[0],
                 })
 
         epoch_avg_loss = epoch_avg_loss / (index + 1)
+        pbar.finish({'loss': epoch_avg_loss})
 
         return epoch_avg_loss
 
@@ -755,6 +899,13 @@ class AutoEncoder_Trainer:
         # set epoch to shift data order each epoch
         # self.val_dataloader.sampler.set_epoch(self.current_epoch)
         with torch.no_grad():
+            pbar = KerasProgressBar(
+                total=len(self.val_dataloader),
+                epoch=self.current_epoch,
+                num_epochs=self.num_epochs,
+                prefix="Val",
+                enabled=self.accelerator.is_main_process,
+            )
             for index, (raw_data) in enumerate(self.val_dataloader):
                 # get data ex: (data, _)
                 data, _ = (
@@ -780,12 +931,25 @@ class AutoEncoder_Trainer:
                 # update loss for the current batch
                 epoch_avg_loss += loss.item()
 
+                # Mise à jour barre de validation
+                avg_val_loss = epoch_avg_loss / (index + 1)
+                val_metrics = {'val_loss': avg_val_loss}
+                if self.calculate_metrics and total_iou > 0:
+                    val_metrics['ssim'] = total_iou / (index + 1)
+                pbar.update(index + 1, val_metrics)
+
         if use_ema:
             self.epoch_val_iou = total_iou / float(index + 1)
         else:
             self.epoch_val_iou = total_iou / float(index + 1)
 
         epoch_avg_loss = epoch_avg_loss / float(index + 1)
+
+        # Finaliser la barre de validation
+        final_metrics = {'val_loss': epoch_avg_loss}
+        if self.calculate_metrics:
+            final_metrics['ssim'] = self.epoch_val_iou
+        pbar.finish(final_metrics)
 
         return epoch_avg_loss
 
@@ -807,7 +971,7 @@ class AutoEncoder_Trainer:
             )
 
         # Run Training and Validation
-        for epoch in tqdm(range(self.num_epochs)):
+        for epoch in range(self.num_epochs):
             # update epoch
             self.current_epoch = epoch
             if self.warmup_enabled or self.current_epoch == 0:
@@ -983,14 +1147,16 @@ class AutoEncoder_Trainer:
 #################################################################################################
 def main():
     """Main function to run training with configuration file."""
-    print("[DEBUG] main() called", flush=True)
     import argparse
     import yaml
     from accelerate import Accelerator
     from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
     
+    # Logger principal
+    logger = get_logger("main", level="INFO")
+    logger.debug("main() appelé")
+    
     # Parse arguments
-    print("[DEBUG] Parsing arguments", flush=True)
     parser = argparse.ArgumentParser(description="Train SegFormer3D model")
     parser.add_argument(
         "--config",
@@ -1066,10 +1232,11 @@ def main():
     )
     
     # Print hardware info
-    accelerator.print(f"[info] -- hardware: {device_type}")
+    log_section(logger, "CONFIGURATION MATÉRIELLE")
+    logger.info(f"Device: {device_type}")
     if device_type == "cuda" and torch.cuda.is_available():
-        accelerator.print(f"[info] -- GPU: {torch.cuda.get_device_name(0)}")
-        accelerator.print(f"[info] -- VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     
     # WandB disabled - skip init_trackers to avoid blocking
     # Trainers will check for wandb_tracker = None
@@ -1077,22 +1244,23 @@ def main():
     # Build model
     from architectures.build_architecture import build_architecture
     model = build_architecture(config)
-    accelerator.print(f"[info] -- model built successfully")
+    num_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Modèle construit ({num_params:,} paramètres)")
     
     # Build datasets and dataloaders
     from dataloaders.build_dataset import build_dataloaders
     train_dataloader, val_dataloader = build_dataloaders(config)
-    accelerator.print(f"[info] -- dataloaders built successfully")
+    logger.info(f"Dataloaders construits (train: {len(train_dataloader)} batches, val: {len(val_dataloader)} batches)")
     
     # Build optimizer
     from optimizers.optimizers import build_optimizer
     optimizer = build_optimizer(model, config)
-    accelerator.print(f"[info] -- optimizer built successfully")
+    logger.info(f"Optimiseur construit: {config.get('optimizer', {}).get('type', '?')}")
     
     # Build criterion
     from losses.losses import build_loss
     criterion = build_loss(config)
-    accelerator.print(f"[info] -- loss criterion built successfully")
+    logger.info(f"Fonction de loss construite")
     
     # Get training parameters from config (support both old and new formats)
     training_cfg = config.get("training_parameters", config.get("training", {}))
@@ -1119,14 +1287,14 @@ def main():
         eta_min=training_cfg.get("min_lr", 1e-6)
     )
     
-    accelerator.print(f"[info] -- schedulers built successfully")
+    logger.info("Schedulers construits")
     
     # Prepare with accelerator
     model, optimizer, train_dataloader, val_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, val_dataloader
     )
     
-    accelerator.print(f"[info] -- model prepared for distributed training")
+    logger.info("Modèle préparé pour l'entraînement distribué")
     
     # Determine trainer type
     trainer_type = training_cfg.get("trainer_type", "segmentation")
@@ -1158,13 +1326,13 @@ def main():
     else:
         raise ValueError(f"Unknown trainer type: {trainer_type}")
     
-    print(f"[info] -- trainer initialized", flush=True)
-    print(f"\n[info] -- starting training for {num_epochs} epochs\n", flush=True)
+    logger.info(f"Trainer initialisé (type: {trainer_type})")
+    logger.info(f"Démarrage de l'entraînement pour {num_epochs} époques")
     
     # Start training
     trainer.train()
     
-    print(f"\n[info] -- training completed successfully\n", flush=True)
+    logger.info("Entraînement terminé avec succès")
 
 
 if __name__ == "__main__":

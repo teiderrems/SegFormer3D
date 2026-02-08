@@ -135,6 +135,12 @@ python pipeline.py \
     --visualize \
     --skip_volume
 
+# Fine-tuning à partir d'un checkpoint existant
+
+python pipeline.py \
+    --finetune_checkpoint ./checkpoints/SegFormer3D/best_model.pth \
+    --target_size 128
+
 ```
 
 ### Utilisation via Makefile
@@ -224,6 +230,8 @@ python scripts/run_visualizations_all.py --test_data_dir ./data/preprocessed_dat
 - `--target_size` : Taille cible pour le resampling des volumes (remplace la config)
 
 - `--checkpoints` : Liste de checkpoints à inférer (ex: `--checkpoints best_model final_model`). Si non fournie, la pipeline essaie par défaut `best_model` puis `final_model`.
+
+- `--finetune_checkpoint` : Chemin vers un checkpoint pour le fine-tuning (permet de continuer l'entraînement à partir d'un modèle pré-entraîné).
 
 - `--visualize` : Générer visualisations et métriques après inférence (utilise `scripts/run_visualizations_all.py`).
 

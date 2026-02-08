@@ -6,7 +6,7 @@ preprocessing:
   # Taille cible pour le resampling des volumes (en voxels)
   # Valeurs recommandées: 64, 96, 128, 256
   # Plus la taille est grande, plus la précision est élevée mais plus la mémoire GPU est nécessaire
-  target_size: 240
+  target_size: 128
 
   # Méthode de normalisation des intensités
   # 'minmax': Normalisation min-max [0,1]
@@ -39,7 +39,7 @@ splits:
 # === PARAMÈTRES D'ENTRAÎNEMENT ===
 training:
   # Nombre d'époques d'entraînement
-  num_epochs: 20
+  num_epochs: 40
 
   # Taille de batch (adapter selon la mémoire GPU disponible)
   batch_size: 2
@@ -48,7 +48,7 @@ training:
   learning_rate: 0.001
 
   # Device: 'cuda' pour GPU, 'cpu' pour CPU
-  device: "cuda"
+  device: "cpu"
 
 # === ARCHITECTURES À UTILISER ===
 architectures:
@@ -62,7 +62,7 @@ paths:
   raw_data_dir: "./data/raw_prostate"
 
   # Répertoire pour les données prétraitées
-  preprocessed_data_dir: "./data/preprocessed_data_240_240_240"
+  preprocessed_data_dir: "./data/prostate_preprocessed/preprocessed_data_128_128_128"
 
   # Répertoire des configurations des modèles
   config_dir: "./configs"

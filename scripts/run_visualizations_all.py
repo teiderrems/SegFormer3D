@@ -10,22 +10,24 @@ import os
 import subprocess
 import time
 from pathlib import Path
+import os
+import concurrent.futures
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.path.realpath(os.getcwd()))
 CONFIG = ROOT / 'configs' / 'config_segformer3d.yaml'
-# Auto-detect test CSV in any preprocessed_data_* folder (prefer '240' if available)
-csv_candidates = list((ROOT / 'data').glob('preprocessed_data_*' '/test.csv'))
+# Auto-detect test CSV in any prostate_preprocessed_* folder (prefer '350' if available)
+csv_candidates = list((ROOT / 'data').glob('prostate_preprocessed_*' '/test.csv'))
 if not csv_candidates:
     csv_candidates = list((ROOT / 'data').rglob('test.csv'))
 if csv_candidates:
     preferred = None
     for p in csv_candidates:
-        if '240' in str(p):
+        if '350' in str(p):
             preferred = p
             break
     TEST_CSV = preferred if preferred else max(csv_candidates, key=lambda p: p.stat().st_mtime)
 else:
-    TEST_CSV = ROOT / 'data' / 'preprocessed_data_128_128_128' / 'test.csv'
+    TEST_CSV = ROOT / 'data' / 'prostate_preprocessed_350_350_350' / 'test.csv'
 
 RESULTS_DIR = ROOT / 'results'
 VIS_DIR = ROOT / 'visualizations'
@@ -117,7 +119,76 @@ def has_been_processed(patient):
     return (outdir / f"{patient}_errors.json").exists()
 
 
+def process_patient(patient, verbosity, skip_volume, timeout, PYTHON, ROOT, CONFIG, RESULTS_DIR, VIS_DIR, test_csv):
+    """Process visualization for a single patient"""
+    failed = []
+    pred = find_prediction_for_patient(patient)
+    if pred is None:
+        if verbosity != 'quiet':
+            print(f"  No prediction found for {patient} in {RESULTS_DIR / patient}. Skipping.")
+        return None  # not failed, just skipped
+
+    outdir = VIS_DIR / patient
+    if has_been_processed(patient):
+        if verbosity != 'quiet':
+            print(f"  Already processed (found {patient}_errors.json). Skipping.")
+        return None
+
+    # Use the same preprocessed folder where the selected test CSV resides (handles 240/128 variants)
+    input_dir = test_csv.parent / patient
+    outdir.mkdir(parents=True, exist_ok=True)
+    if not input_dir.exists():
+        # fallback: try previous hardcoded path to not break older setups
+        input_dir = ROOT / 'data' / 'prostate_preprocessed_350_350_350' / patient
+        if not input_dir.exists():
+            print(f"  Input data not found for {patient} (checked {test_csv.parent} and prostate_preprocessed_350_350_350). Skipping.")
+            return None
+
+    cmd = [PYTHON, str(ROOT / 'visualize_results.py'),
+           '--config', str(CONFIG),
+           '--prediction', str(pred),
+           '--input_dir', str(input_dir),
+           '--output_dir', str(outdir),
+           '--compute_errors']
+    # Add volume visualization unless user asked to skip it
+    if not skip_volume:
+        cmd.append('--volume_vis')
+    # Always pass verbosity to child script so behavior is consistent
+    cmd.extend(['--verbosity', verbosity])
+
+    if verbosity != 'quiet':
+        print('  Running:', ' '.join(cmd))
+    t0 = time.time()
+    try:
+        if timeout and timeout > 0:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        else:
+            res = subprocess.run(cmd, capture_output=True, text=True)
+        duration = time.time() - t0
+        if verbosity == 'debug':
+            print(f"[debug] Visualization {patient} duration: {duration:.3f}s")
+        if res.returncode != 0:
+            if verbosity != 'quiet':
+                print('  Error running visualization:', res.returncode)
+                print(res.stderr)
+            else:
+                # always show errors even in quiet mode
+                print(f"Error for {patient}: {res.returncode}\n{res.stderr}")
+            return patient  # failed
+        else:
+            if verbosity != 'quiet':
+                print(f"  Visualizations saved to {outdir}")
+            return None
+    except subprocess.TimeoutExpired as e:
+        print(f"Visualization for {patient} timed out after {timeout} seconds; skipping.")
+        return patient
+    except Exception as e:
+        print(f"Unexpected error during visualization for {patient}: {e}")
+        return patient
+
+
 def main():
+    global RESULTS_DIR, VIS_DIR
     # CLI: verbosity level
     parser = argparse.ArgumentParser(description="Générateur de visualisations en batch pour tous les patients")
     parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité : quiet | normal | debug')
@@ -145,10 +216,6 @@ def main():
         VIS_DIR = ROOT / 'visualizations' / args.vis_tag
     else:
         VIS_DIR = ROOT / 'visualizations'
-
-    os.makedirs(VIS_DIR, exist_ok=True)
-
-    # Determine which test CSV to use (priority: --test_csv > --test_dir > --test_data_dir > config > auto-detected TEST_CSV)
     # Respect explicit --config if provided
     config_path = Path(args.config) if args.config else CONFIG
     test_csv = get_test_csv_from_args_and_config(args, config_path=config_path, default=TEST_CSV)
@@ -160,71 +227,24 @@ def main():
     if verbosity != 'quiet':
         print(f"Found {len(patients)} patients in {test_csv}")
 
-    for patient in tqdm(patients, desc="Visualizations", unit="patient"):
-        if verbosity != 'quiet':
-            tqdm.write('---')
-            tqdm.write(f"Processing {patient}")
-        pred = find_prediction_for_patient(patient)
-        if pred is None:
-            if verbosity != 'quiet':
-                print(f"  No prediction found for {patient} in {RESULTS_DIR / patient}. Skipping.")
-            continue
-        outdir = VIS_DIR / patient
-        if has_been_processed(patient):
-            if verbosity != 'quiet':
-                print(f"  Already processed (found {patient}_errors.json). Skipping.")
-            continue
-
-        # Use the same preprocessed folder where the selected test CSV resides (handles 240/128 variants)
-        input_dir = test_csv.parent / patient
-        outdir.mkdir(parents=True, exist_ok=True)
-        if not input_dir.exists():
-            # fallback: try previous hardcoded path to not break older setups
-            input_dir = ROOT / 'data' / 'preprocessed_data_128_128_128' / patient
-            if not input_dir.exists():
-                print(f"  Input data not found for {patient} (checked {test_csv.parent} and preprocessed_data_128_128_128). Skipping.")
-                continue
-
-        cmd = [PYTHON, str(ROOT / 'visualize_results.py'),
-               '--config', str(CONFIG),
-               '--prediction', str(pred),
-               '--input_dir', str(input_dir),
-               '--output_dir', str(outdir),
-               '--compute_errors']
-        # Add volume visualization unless user asked to skip it
-        if not skip_volume:
-            cmd.append('--volume_vis')
-        # Always pass verbosity to child script so behavior is consistent
-        cmd.extend(['--verbosity', verbosity])
-
-        if verbosity != 'quiet':
-            print('  Running:', ' '.join(cmd))
-        t0 = time.time()
-        try:
-            if timeout and timeout > 0:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-            else:
-                res = subprocess.run(cmd, capture_output=True, text=True)
-            duration = time.time() - t0
-            if verbosity == 'debug':
-                print(f"[debug] Visualization {patient} duration: {duration:.3f}s")
-            if res.returncode != 0:
-                if verbosity != 'quiet':
-                    print('  Error running visualization:', res.returncode)
-                    print(res.stderr)
-                else:
-                    # always show errors even in quiet mode
-                    print(f"Error for {patient}: {res.returncode}\n{res.stderr}")
+    # Parallel processing
+    max_workers = os.cpu_count() or 4  # Use all available CPUs
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_patient = {
+            executor.submit(process_patient, patient, verbosity, skip_volume, timeout, PYTHON, ROOT, CONFIG, RESULTS_DIR, VIS_DIR, test_csv): patient
+            for patient in patients
+        }
+        # Collect results as they complete
+        for future in tqdm(concurrent.futures.as_completed(future_to_patient), total=len(patients), desc="Visualizations", unit="patient"):
+            patient = future_to_patient[future]
+            try:
+                failed_patient = future.result()
+                if failed_patient:
+                    failed.append(failed_patient)
+            except Exception as exc:
+                print(f"Patient {patient} generated an exception: {exc}")
                 failed.append(patient)
-            else:
-                if verbosity != 'quiet':
-                    print(f"  Visualizations saved to {outdir}")
-        except subprocess.TimeoutExpired as e:
-            print(f"Visualization for {patient} timed out after {timeout} seconds; skipping.")
-            failed.append(patient)
-        except Exception as e:
-            print(f"Unexpected error during visualization for {patient}: {e}")
-            failed.append(patient)
 
     # After processing all patients, aggregate per-patient metrics into a summary JSON
     try:

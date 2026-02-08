@@ -14,6 +14,12 @@ from pathlib import Path
 import random
 import yaml
 
+# Logger unifié
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from train_scripts.logger import get_logger, log_pipeline_step, log_section
+
+pipeline_logger = get_logger("pipeline", level="INFO")
+
 
 def load_pipeline_config(config_path):
     """
@@ -87,15 +93,15 @@ def load_pipeline_config(config_path):
                 return result
 
             config = merge_configs(default_config, user_config)
-            print(f"Configuration chargée depuis: {config_path}")
+            pipeline_logger.info(f"Configuration chargée depuis: {config_path}")
             return config
 
         except Exception as e:
-            print(f"Erreur lors du chargement de la configuration {config_path}: {e}")
-            print("Utilisation de la configuration par défaut")
+            pipeline_logger.error(f"Erreur lors du chargement de {config_path}: {e}")
+            pipeline_logger.warning("Utilisation de la configuration par défaut")
             return default_config
     else:
-        print("Fichier de configuration non trouvé, utilisation des paramètres par défaut")
+        pipeline_logger.warning("Fichier de configuration non trouvé, utilisation des paramètres par défaut")
         return default_config
 
 def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42, architecture="SegFormer3D"):
@@ -105,18 +111,16 @@ def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, v
     """
     preprocessed_path = Path(preprocessed_dir)
     if not preprocessed_path.exists():
-        print(f"Répertoire prétraité non trouvé: {preprocessed_path}")
+        pipeline_logger.error(f"Répertoire prétraité non trouvé: {preprocessed_path}")
         return False
 
     # Chemin vers le script create_prostate_splits.py centralisé
     script_path = Path(__file__).parent / "data" / "prostate_raw_data" / "create_prostate_splits.py"
     if not script_path.exists():
-        print(f"Script create_prostate_splits.py non trouvé: {script_path}")
-        print("Utilisation de la méthode sklearn simple...")
+        pipeline_logger.warning(f"Script create_prostate_splits.py non trouvé, utilisation de sklearn")
         return generate_csv_splits_sklearn(preprocessed_dir, split_type, train_ratio, val_ratio, test_ratio, k_folds, random_seed)
 
-    print(f"Génération des CSV pour les données prétraitées avec stratification par classe dominante")
-    print(f"Utilisation du script: {script_path}")
+    pipeline_logger.info(f"Génération des CSV avec stratification par classe dominante")
 
     # Déterminer les arguments pour le script
     if split_type == "fixed":
@@ -142,21 +146,19 @@ def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, v
             "--stratified", "true"
         ]
     else:
-        print(f"Type de split inconnu: {split_type}. Utilisez 'fixed' ou 'kfold'")
+        pipeline_logger.error(f"Type de split inconnu: {split_type}. Utilisez 'fixed' ou 'kfold'")
         return False
 
     # Exécuter le script
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print("Sortie du script de génération de splits:")
-        print(result.stdout)
+        pipeline_logger.debug(result.stdout.strip())
         if result.stderr:
-            print("Erreurs:", result.stderr)
+            pipeline_logger.warning(result.stderr.strip())
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Erreur lors de l'exécution du script create_prostate_splits.py: {e}")
-        print("Sortie d'erreur:", e.stderr)
-        print("Utilisation de la méthode sklearn simple comme fallback...")
+        pipeline_logger.error(f"Erreur create_prostate_splits.py: {e}")
+        pipeline_logger.warning("Utilisation de la méthode sklearn comme fallback")
         return generate_csv_splits_sklearn(preprocessed_dir, split_type, train_ratio, val_ratio, test_ratio, k_folds, random_seed)
 
 
@@ -170,12 +172,12 @@ def generate_csv_splits_sklearn(preprocessed_dir, split_type="fixed", train_rati
     try:
         from sklearn.model_selection import train_test_split, KFold
     except Exception as e:
-        print("sklearn is required for generate_csv_splits_sklearn: ", e)
+        pipeline_logger.error(f"sklearn requis: {e}")
         return False
 
     preprocessed_path = Path(preprocessed_dir)
     if not preprocessed_path.exists():
-        print(f"Répertoire prétraité non trouvé: {preprocessed_path}")
+        pipeline_logger.error(f"Répertoire prétraité non trouvé: {preprocessed_path}")
         return False
 
     # Lister tous les patients prétraités
@@ -185,13 +187,13 @@ def generate_csv_splits_sklearn(preprocessed_dir, split_type="fixed", train_rati
             patients.append(item.name)
 
     if not patients:
-        print(f"Aucun patient prétraité trouvé dans {preprocessed_path}")
+        pipeline_logger.error(f"Aucun patient prétraité trouvé dans {preprocessed_path}")
         return False
 
     patients.sort()  # Pour reproductibilité
     random.seed(random_seed)
 
-    print(f"Génération des CSV (méthode sklearn) pour {len(patients)} patients avec split_type='{split_type}'")
+    pipeline_logger.info(f"Génération CSV (sklearn) pour {len(patients)} patients, split='{split_type}'")
 
     if split_type == "fixed":
         # Split fixe train/val/test
@@ -217,7 +219,7 @@ def generate_csv_splits_sklearn(preprocessed_dir, split_type="fixed", train_rati
         val_df.to_csv(preprocessed_path / "validation.csv", index=False)
         test_df.to_csv(preprocessed_path / "test.csv", index=False)
 
-        print(f"CSV générés: train ({len(train_patients)}), validation ({len(val_patients)}), test ({len(test_patients)})")
+        pipeline_logger.info(f"CSV générés: train ({len(train_patients)}), val ({len(val_patients)}), test ({len(test_patients)})")
 
     elif split_type == "kfold":
         # Validation croisée k-fold
@@ -241,30 +243,31 @@ def generate_csv_splits_sklearn(preprocessed_dir, split_type="fixed", train_rati
             train_df.to_csv(preprocessed_path / f"train_fold_{fold+1}.csv", index=False)
             val_df.to_csv(preprocessed_path / f"validation_fold_{fold+1}.csv", index=False)
 
-        print(f"CSV générés pour {k_folds} folds de validation croisée")
+        pipeline_logger.info(f"CSV générés pour {k_folds} folds")
 
     else:
-        print(f"Type de split inconnu: {split_type}. Utilisez 'fixed' ou 'kfold'")
+        pipeline_logger.error(f"Type de split inconnu: {split_type}")
         return False
 
     return True
 
 def run_command(command, cwd=None, description=""):
     """Exécute une commande et affiche le résultat"""
-    print(f"\n=== {description} ===")
-    print(f"Commande: {command}")
+    log_section(pipeline_logger, description)
+    pipeline_logger.debug(f"Commande: {command}")
     try:
         result = subprocess.run(command, shell=True, cwd=cwd, capture_output=True, text=True, check=True)
-        print("Sortie standard:")
-        print(result.stdout)
+        if result.stdout.strip():
+            pipeline_logger.debug(result.stdout.strip())
         if result.stderr:
-            print("Erreurs:")
-            print(result.stderr)
+            pipeline_logger.warning(result.stderr.strip())
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Erreur lors de l'exécution: {e}")
-        print(f"Sortie standard: {e.stdout}")
-        print(f"Erreurs: {e.stderr}")
+        pipeline_logger.error(f"Erreur lors de l'exécution: {e}")
+        if e.stdout:
+            pipeline_logger.debug(f"Sortie: {e.stdout.strip()}")
+        if e.stderr:
+            pipeline_logger.error(f"Erreur: {e.stderr.strip()}")
         return False
 
 def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42, target_size=96, normalize_method="minmax", skip_existing=True):
@@ -272,7 +275,7 @@ def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", tra
     # Vérifier le script de prétraitement centralisé
     preprocess_script = Path("data") / "prostate_raw_data" / "prostate_preprocess.py"
     if not preprocess_script.exists():
-        print(f"Script de prétraitement non trouvé: {preprocess_script}")
+        pipeline_logger.error(f"Script de prétraitement non trouvé: {preprocess_script}")
         return False
 
     # Créer le répertoire de sortie si nécessaire
@@ -289,31 +292,36 @@ def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", tra
 
     # Générer les CSV après prétraitement réussi
     if not generate_csv_splits(output_dir, split_type, train_ratio, val_ratio, test_ratio, k_folds, random_seed, architecture):
-        print(f"Échec de la génération des CSV pour {architecture}")
+        pipeline_logger.error(f"Échec de la génération des CSV pour {architecture}")
         return False
 
     return True
 
-def train_model(architecture, config_path):
+def train_model(architecture, config_path, checkpoint_path=None):
     """Entraîne le modèle pour une architecture donnée"""
     # Trouver le script d'entraînement centralisé
     train_script = Path("train_scripts") / "trainer_ddp.py"
     if not train_script.exists():
-        print(f"Script d'entraînement non trouvé: {train_script}")
+        pipeline_logger.error(f"Script d'entraînement non trouvé: {train_script}")
         return False
 
     # Commande d'entraînement
     absolute_config = Path(config_path).resolve()
     command = f"{sys.executable} {train_script} --config {absolute_config}"
+    if checkpoint_path:
+        absolute_checkpoint = Path(checkpoint_path).resolve()
+        command += f" --checkpoint {absolute_checkpoint}"
 
-    print(f"\n=== Entraînement du modèle pour {architecture} ===")
-    print(f"Commande: {command}")
+    log_section(pipeline_logger, f"Entraînement {architecture}")
+    if checkpoint_path:
+        pipeline_logger.info(f"Fine-tuning depuis: {checkpoint_path}")
+    pipeline_logger.debug(f"Commande: {command}")
     result = subprocess.run(command, shell=True, cwd=str(Path(__file__).parent))
     if result.returncode == 0:
-        print("Entraînement terminé avec succès")
+        pipeline_logger.info("Entraînement terminé avec succès")
         return True
     else:
-        print(f"Erreur lors de l'entraînement: {result.returncode}")
+        pipeline_logger.error(f"Erreur d'entraînement (code: {result.returncode})")
         return False
 
 def run_inference(architecture, config_path, checkpoint_path, test_data_dir, output_dir):
@@ -321,8 +329,19 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
     # Trouver le script d'inférence centralisé
     inference_script = Path("inference_simple.py")
     if not inference_script.exists():
-        print(f"Script d'inférence non trouvé: {inference_script}")
+        pipeline_logger.error(f"Script d'inférence non trouvé: {inference_script}")
         return False
+
+    # Charger la configuration pour récupérer les paramètres d'inférence
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f) or {}
+
+    inference_params = config.get('inference_parameters', {})
+    batch_size = inference_params.get('batch_size', 1)
+    device = inference_params.get('device', 'cuda')
+    save_predictions = inference_params.get('save_predictions', True)
+    save_probabilities = inference_params.get('save_probabilities', False)
+    threshold = inference_params.get('threshold', 0.5)
 
     # Créer le répertoire de sortie
     output_dir = Path(output_dir)
@@ -331,12 +350,12 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
     # Traiter chaque patient dans le répertoire de test
     test_data_path = Path(test_data_dir)
     if not test_data_path.exists():
-        print(f"Répertoire de données de test non trouvé: {test_data_path}")
+        pipeline_logger.error(f"Répertoire de test non trouvé: {test_data_path}")
         return False
 
     patients = [p for p in test_data_path.iterdir() if p.is_dir()]
     if not patients:
-        print(f"Aucun patient trouvé dans {test_data_path}")
+        pipeline_logger.error(f"Aucun patient trouvé dans {test_data_path}")
         return False
 
     success_count = 0
@@ -353,13 +372,18 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
         outp = Path(patient_output_dir).resolve()
 
         # Commande d'inférence pour ce patient
-        command = f"{sys.executable} {inference_script} --config {cfg} --checkpoint {chk} --input_dir {inp} --output_dir {outp}"
+        command = f"{sys.executable} {inference_script} --config {cfg} --checkpoint {chk} --input_dir {inp} --output_dir {outp} --batch_size {batch_size} --device {device}"
+        if save_predictions:
+            command += " --save_predictions"
+        if save_probabilities:
+            command += " --save_probabilities"
+        command += f" --threshold {threshold}"
         if run_command(command, cwd=str(Path(__file__).parent), description=f"Inférence pour {architecture} - {patient_dir.name}"):
             success_count += 1
         else:
-            print(f"Échec pour le patient {patient_dir.name}")
+            pipeline_logger.warning(f"Échec pour le patient {patient_dir.name}")
 
-    print(f"Inférence terminée: {success_count}/{len(patients)} patients traités")
+    pipeline_logger.info(f"Inférence terminée: {success_count}/{len(patients)} patients traités")
     return success_count > 0
 
 def main():
@@ -398,6 +422,8 @@ def main():
                        help="Taille cible pour le resampling des volumes (remplace la config)")
     parser.add_argument('--checkpoints', nargs='*', default=None,
                         help="Liste de checkpoints à inférer (ex: best_model final_model). Si non fourni, utilise la détection automatique")
+    parser.add_argument('--finetune_checkpoint', type=str, default=None,
+                        help="Chemin vers un checkpoint pour le fine-tuning (remplace l'entraînement from scratch)")
     parser.add_argument('--visualize', action='store_true', help='Générer visualisations et métriques après inférence')
     parser.add_argument('--test_data_dir', type=str, help='Répertoire des données de test (remplace la config)')
     parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D pour la génération des visualisations')
@@ -454,25 +480,29 @@ def main():
     Path(config['paths']['results_dir']).mkdir(parents=True, exist_ok=True)
 
     # Afficher la configuration utilisée
-    print("Configuration de la pipeline:")
-    print(f"  Architectures: {config['architectures']['enabled']}")
-    print(f"  Données brutes: {config['paths']['raw_data_dir']}")
-    print(f"  Données prétraitées: {config['paths']['preprocessed_data_dir']}")
-    print(f"  Taille des volumes: {config['preprocessing']['target_size']}x{config['preprocessing']['target_size']}x{config['preprocessing']['target_size']}")
-    print(f"  Type de split: {config['splits']['split_type']}")
+    pipeline_logger.info("Configuration de la pipeline:")
+    pipeline_logger.info(f"  Architectures: {config['architectures']['enabled']}")
+    pipeline_logger.info(f"  Données brutes: {config['paths']['raw_data_dir']}")
+    pipeline_logger.info(f"  Données prétraitées: {config['paths']['preprocessed_data_dir']}")
+    ts = config['preprocessing']['target_size']
+    pipeline_logger.info(f"  Taille des volumes: {ts}x{ts}x{ts}")
+    pipeline_logger.info(f"  Type de split: {config['splits']['split_type']}")
     if config['splits']['split_type'] == 'fixed':
-        print(f"  Ratios: Train={config['splits']['train_ratio']}, Val={config['splits']['val_ratio']}, Test={config['splits']['test_ratio']}")
+        pipeline_logger.info(f"  Ratios: Train={config['splits']['train_ratio']}, Val={config['splits']['val_ratio']}, Test={config['splits']['test_ratio']}")
     else:
-        print(f"  Nombre de folds: {config['splits']['k_folds']}")
-    print(f"  Stratification: {'Activée' if config['splits']['stratified'] else 'Désactivée'}")
-    print()
+        pipeline_logger.info(f"  Nombre de folds: {config['splits']['k_folds']}")
+    pipeline_logger.info(f"  Stratification: {'Activée' if config['splits']['stratified'] else 'Désactivée'}")
 
     success_count = 0
 
+    # Normaliser architectures en liste (supporte string ou liste dans la config)
+    archs = config['architectures']['enabled']
+    if isinstance(archs, str):
+        archs = [archs]
+    config['architectures']['enabled'] = archs
+
     for arch in config['architectures']['enabled']:
-        print(f"\n{'='*50}")
-        print(f"TRAITEMENT DE L'ARCHITECTURE: {arch}")
-        print(f"{'='*50}")
+        log_section(pipeline_logger, f"ARCHITECTURE: {arch}")
 
         # 1. Prétraitement
         if not config['advanced']['skip_preprocess']:
@@ -482,7 +512,7 @@ def main():
                                  config['splits']['k_folds'], config['splits']['random_seed'],
                                  config['preprocessing']['target_size'], config['preprocessing']['normalize_method'],
                                  config['preprocessing']['skip_existing']):
-                print(f"Échec du prétraitement pour {arch}")
+                pipeline_logger.error(f"Échec du prétraitement pour {arch}")
                 continue
 
         # 2. Entraînement
@@ -493,7 +523,7 @@ def main():
             config_path = Path("configs") / f"config_{arch.lower()}.yaml"
 
         if not config_path.exists():
-            print(f"Configuration non trouvée: {config_path}")
+            pipeline_logger.error(f"Configuration non trouvée: {config_path}")
             continue
 
         # Load architecture config (and inject pipeline-level preferences)
@@ -518,11 +548,11 @@ def main():
 
             train_cfg_to_use = str(tmp_cfg_file)
         except Exception as e:
-            print(f"Erreur lors de l'injection des augmentations dans la config: {e}")
+            pipeline_logger.error(f"Erreur injection augmentations: {e}")
             train_cfg_to_use = str(config_path)
 
-        if not train_model(arch, train_cfg_to_use):
-            print(f"Échec de l'entraînement pour {arch}")
+        if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint):
+            pipeline_logger.error(f"Échec de l'entraînement pour {arch}")
             continue
 
         # 3. Inférence
@@ -546,21 +576,23 @@ def main():
             # Rechercher des fichiers correspondant au nom du checkpoint (ex: best_model*) dans plusieurs emplacements
             candidates = []
             pattern = f"{ckpt_name}*"
+            # Chercher d'abord dans le répertoire principal
+            candidates += list(repo_ckpt_dir.glob(pattern))
+            # Puis dans le sous-répertoire de l'architecture si existant
             if checkpoint_dir_arch.exists():
                 candidates += list(checkpoint_dir_arch.glob(pattern))
-            candidates += list(repo_ckpt_dir.glob(pattern))
 
             # Fallback: prendre tout .pth/.pt si aucun n'a été trouvé pour ce nom
             if not candidates:
                 candidates += list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
 
             if not candidates:
-                print(f"Aucun checkpoint trouvé pour '{ckpt_name}' dans {checkpoint_dir_arch} ni {repo_ckpt_dir}. Ignorer.")
+                pipeline_logger.warning(f"Aucun checkpoint pour '{ckpt_name}'. Ignoré.")
                 continue
 
             # Choisir le plus récent parmi les candidats
             checkpoint_path = max(candidates, key=lambda p: p.stat().st_mtime)
-            print(f"Utilisation du checkpoint '{ckpt_name}': {checkpoint_path}")
+            pipeline_logger.info(f"Checkpoint '{ckpt_name}': {checkpoint_path}")
 
             # Résultats séparés par tag (ex: results/SegFormer3D/best_model/)
             results_dir = base_results_dir / ckpt_name
@@ -569,7 +601,7 @@ def main():
             # Lancer l'inférence
             ok = run_inference(arch, str(config_path), str(checkpoint_path), str(test_data_dir), str(results_dir))
             if not ok:
-                print(f"Échec de l'inférence pour {arch} avec checkpoint {checkpoint_path}")
+                pipeline_logger.error(f"Échec inférence {arch} avec {checkpoint_path}")
                 continue
 
             any_success_for_arch = True
@@ -582,19 +614,20 @@ def main():
                 if args.vis_timeout and args.vis_timeout > 0:
                     vis_cmd += f" --timeout {args.vis_timeout}"
 
-                print(f"Lancement des visualisations pour {arch} / {ckpt_name} (commande: {vis_cmd})")
-                run_command(vis_cmd, cwd=str(Path(__file__).parent), description=f"Visualisations pour {arch} ({ckpt_name})")
+                pipeline_logger.info(f"Visualisations pour {arch} / {ckpt_name}")
+                run_command(vis_cmd, cwd=str(Path(__file__).parent), description=f"Visualisations {arch} ({ckpt_name})")
 
         if not any_success_for_arch:
-            print(f"Aucune inférence réussie pour {arch}")
+            pipeline_logger.warning(f"Aucune inférence réussie pour {arch}")
             continue
 
         success_count += 1
-        print(f"Pipeline terminée avec succès pour {arch}")
+        pipeline_logger.info(f"Pipeline terminée avec succès pour {arch}")
 
-    print(f"\n{'='*50}")
-    print(f"PIPELINE TERMINÉE: {success_count}/{len(config['architectures']['enabled'])} architectures traitées avec succès")
-    print(f"{'='*50}")
+    pipeline_logger.info("")
+    pipeline_logger.info("=" * 60)
+    pipeline_logger.info(f"  PIPELINE TERMINÉE: {success_count}/{len(config['architectures']['enabled'])} architectures")
+    pipeline_logger.info("=" * 60)
 
 if __name__ == "__main__":
     main()

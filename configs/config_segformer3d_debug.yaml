@@ -12,7 +12,7 @@ model:
   depths: [2, 2, 2, 2]
   decoder_head_embedding_dim: 256
   decoder_dropout: 0.1
-  input_size: [240, 240, 240]
+  input_size: [128, 128, 128]
 
 training_parameters:
   batch_size: 1
@@ -35,30 +35,30 @@ warmup_scheduler:
   warmup_epochs: 10
 
 sliding_window_inference:
-  roi: [240, 240, 240]
+  roi: [128, 128, 128]
   sw_batch_size: 1
 
 # Dataset parameters with debug augment enabled
 dataset_parameters:
   dataset_type: prostate_seg
   train_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240
-    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/train.csv
+    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128
+    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/train.csv
     train: true
-    target_size: 240
+    target_size: 128
     augmentations: true
     debug_augment: true
   val_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240
-    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/validation.csv
+    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128
+    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/validation.csv
     train: false
-    target_size: 240
+    target_size: 128
     augmentations: false
   test_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_240_240_240
-    split_file: ./data/prostate_preprocessed/preprocessed_data_240_240_240/test.csv
+    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128
+    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/test.csv
     train: false
-    target_size: 240
+    target_size: 128
     augmentations: false
 
 dataloader:
@@ -86,6 +86,6 @@ metrics:
   - iou
 
 checkpoint:
-  save_dir: ./checkpoints
-  save_freq: 10
-  keep_last: 5
+  save_dir: ./checkpoints          # Répertoire de sauvegarde
+  save_freq: 5                     # Sauvegarde périodique toutes les 5 époques (debug)
+  keep_last: 3                     # Conserver les 3 derniers checkpoints

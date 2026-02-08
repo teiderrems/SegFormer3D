@@ -14,12 +14,13 @@ import time
 # Ajouter le répertoire parent au path
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from architectures.build_architecture import build_architecture
-from torchsummary import summary
+from train_scripts.logger import get_logger
 
-# Global verbosity level: 'quiet', 'normal', or 'debug' (set by CLI)
-VERBOSITY = 'normal'   # default
+# Logger d'inférence (configuré dans main)
+inference_logger = None
 
 def load_config(config_path):
     """Charge la configuration YAML"""
@@ -28,24 +29,40 @@ def load_config(config_path):
 
 def load_model(checkpoint_path, config):
     """Charge le modèle depuis le checkpoint"""
+    global inference_logger
     # Créer le modèle
     model = build_architecture(config)
     target_size = config["dataset_parameters"]["train_dataset_args"]["target_size"]
-    summary(model, input_size=(1, target_size, target_size, target_size))
-    if VERBOSITY != 'quiet':
-        print(f"Modèle créé: {config['model']['name']}")
-    if VERBOSITY == 'debug':
+    if inference_logger:
+        inference_logger.info(f"Modèle créé: {config['model']['name']}")
         total_params = sum(p.numel() for p in model.parameters())
-        print(f"[debug] Model parameters: {total_params}")
+        inference_logger.debug(f"Paramètres du modèle: {total_params:,}")
 
     # Charger les poids
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-    if 'state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['state_dict'])
+    if isinstance(checkpoint, dict):
+        # Nouveau format enrichi (best_model.pth / final_model.pth / periodic)
+        if 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+            if inference_logger:
+                ep = checkpoint.get('epoch', '?')
+                dice = checkpoint.get('val_dice', checkpoint.get('best_val_dice', '?'))
+                inference_logger.info(
+                    f"Checkpoint chargé (epoch {ep}, dice={dice}) depuis: {checkpoint_path}"
+                )
+        elif 'state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['state_dict'])
+            if inference_logger:
+                inference_logger.info(f"Checkpoint chargé depuis: {checkpoint_path}")
+        else:
+            # Peut être un state_dict brut
+            model.load_state_dict(checkpoint)
+            if inference_logger:
+                inference_logger.info(f"State dict chargé depuis: {checkpoint_path}")
     else:
         model.load_state_dict(checkpoint)
-    if VERBOSITY != 'quiet':
-        print(f"Checkpoint chargé depuis: {checkpoint_path}")
+        if inference_logger:
+            inference_logger.info(f"Checkpoint chargé depuis: {checkpoint_path}")
 
     model.eval()
     return model
@@ -110,73 +127,72 @@ def main():
     parser.add_argument("--input_dir", required=True, help="Répertoire des données d'entrée")
     parser.add_argument("--output_dir", default="inference_results", help="Répertoire de sortie")
     parser.add_argument("--verbosity", choices=["quiet","normal","debug"], default="normal", help="Niveau de verbosité: quiet|normal|debug")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size pour l'inférence (défaut: 1)")
+    parser.add_argument("--device", type=str, default="cpu", help="Device (cpu|cuda, défaut: cpu)")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Seuil de confiance (défaut: 0.5)")
+    parser.add_argument("--save_predictions", action="store_true", help="Sauvegarder les prédictions")
+    parser.add_argument("--save_probabilities", action="store_true", help="Sauvegarder les probabilités")
 
     args = parser.parse_args()
 
-    # Set global verbosity
-    global VERBOSITY
-    VERBOSITY = args.verbosity
+    # Configurer le logger d'inférence
+    global inference_logger
+    level_map = {'quiet': 'WARNING', 'normal': 'INFO', 'debug': 'DEBUG'}
+    inference_logger = get_logger(
+        "inference",
+        level=level_map.get(args.verbosity, 'INFO'),
+    )
 
     # Créer le répertoire de sortie
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Charger la configuration
     config = load_config(args.config)
-    if VERBOSITY != 'quiet':
-        print(f"Configuration chargée: {config['model']['name']}")
+    inference_logger.info(f"Configuration chargée: {config['model']['name']}")
 
     # Charger le modèle
     model = load_model(args.checkpoint, config)
 
     # Charger les données du patient
     modalities, labels = load_patient_data(args.input_dir)
-    if VERBOSITY != 'quiet':
-        print(f"Modalités chargées: shape={modalities.shape}")
-        if labels is not None:
-            print(f"Labels chargés: shape={labels.shape}")
-    if VERBOSITY == 'debug':
-        print(f"[debug] Modalités dtype={modalities.dtype}, min={modalities.min()}, max={modalities.max()}")
-        if labels is not None:
-            print(f"[debug] Labels unique: {np.unique(labels)}")
+    inference_logger.info(f"Modalités chargées: shape={modalities.shape}")
+    if labels is not None:
+        inference_logger.info(f"Labels chargés: shape={labels.shape}")
+    inference_logger.debug(f"Modalités dtype={modalities.dtype}, min={modalities.min():.4f}, max={modalities.max():.4f}")
+    if labels is not None:
+        inference_logger.debug(f"Labels unique: {np.unique(labels)}")
 
     t0 = time.time()
     processed_volume = preprocess_volume(modalities, target_size=tuple(config['model']['input_size']))
     preprocessing_time = time.time() - t0
-    if VERBOSITY != 'quiet':
-        print(f"Volume prétraité: shape={processed_volume.shape}")
-    if VERBOSITY == 'debug':
-        print(f"[debug] Preprocessing time: {preprocessing_time:.3f}s, processed shape={processed_volume.shape}, dtype={processed_volume.dtype}")
+    inference_logger.info(f"Volume prétraité: shape={processed_volume.shape}")
+    inference_logger.debug(f"Preprocessing: {preprocessing_time:.3f}s")
 
     # Faire la prédiction
     t0 = time.time()
     prediction = predict_volume(model, processed_volume.unsqueeze(0))  # Ajouter batch dim
     inference_time = time.time() - t0
-    if VERBOSITY != 'quiet':
-        print(f"Prédiction faite: shape={prediction.shape}")
-    if VERBOSITY == 'debug':
-        print(f"[debug] Inference time: {inference_time:.3f}s, prediction shape={prediction.shape}, unique={np.unique(prediction.numpy())}")
+    inference_logger.info(f"Prédiction faite: shape={prediction.shape} ({inference_time:.2f}s)")
+    inference_logger.debug(f"Prediction unique values: {np.unique(prediction.numpy())}")
 
     # Sauvegarder la prédiction
     output_path = os.path.join(args.output_dir, f"prediction_{os.path.basename(args.input_dir)}.pt")
     torch.save(prediction, output_path)
-    if VERBOSITY != 'quiet':
-        print(f"Prédiction sauvegardée: {output_path}")
-    if VERBOSITY == 'debug':
-        try:
-            size = os.path.getsize(output_path)
-            print(f"[debug] Saved prediction file size: {size} bytes")
-        except Exception:
-            pass
+    inference_logger.info(f"Prédiction sauvegardée: {output_path}")
+    try:
+        size = os.path.getsize(output_path)
+        inference_logger.debug(f"Taille du fichier: {size / 1024:.1f} KB")
+    except Exception:
+        pass
 
     # Statistiques
     unique, counts = np.unique(prediction.numpy(), return_counts=True)
-    if VERBOSITY != 'quiet':
-        print("\nStatistiques de prédiction:")
-        class_names = ['Background', 'Prostate', 'Bandelettes']
-        for i, (cls, count) in enumerate(zip(unique, counts)):
-            if i < len(class_names):
-                percentage = count / prediction.numel() * 100
-                print(f"{class_names[i]}: {percentage:.1f}%")
+    inference_logger.info("Statistiques de prédiction:")
+    class_names = ['Background', 'Prostate', 'Bandelettes']
+    for i, (cls, count) in enumerate(zip(unique, counts)):
+        if i < len(class_names):
+            percentage = count / prediction.numel() * 100
+            inference_logger.info(f"  {class_names[i]}: {percentage:.1f}%")
 
 if __name__ == "__main__":
     main()

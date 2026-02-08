@@ -6,24 +6,26 @@ from tqdm import tqdm
 import subprocess
 import sys
 import time
+import os
 from pathlib import Path
+import concurrent.futures
 
-ROOT = Path(__file__).resolve().parents[1]
-# Auto-detect test CSV in any preprocessed_data_* folder (prefer higher resolution like 240 if available)
-csv_candidates = list((ROOT / 'data').glob('preprocessed_data_*' '/test.csv'))
+ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Auto-detect test CSV in any prostate_preprocessed_* folder (prefer higher resolution like 350 if available)
+csv_candidates = list((ROOT / 'data').glob('prostate_preprocessed_*' '/test.csv'))
 if not csv_candidates:
     # fallback: look for test.csv anywhere under data/
     csv_candidates = list((ROOT / 'data').rglob('test.csv'))
 if csv_candidates:
-    # prefer one containing '240' if present, else pick the most recently modified
+    # prefer one containing '350' if present, else pick the most recently modified
     preferred = None
     for p in csv_candidates:
-        if '240' in str(p):
+        if '350' in str(p):
             preferred = p
             break
     CSV = preferred.resolve() if preferred else max(csv_candidates, key=lambda p: p.stat().st_mtime).resolve()
 else:
-    CSV = (ROOT / 'data' /'prostate_preprocessed'/ 'preprocessed_data_240_240_240' / 'test.csv').resolve()
+    CSV = (ROOT / 'data' /'prostate_preprocessed'/ 'prostate_preprocessed_350_350_350' / 'test.csv').resolve()
 # Detect checkpoint candidates (prefer repo-level checkpoints/ then SegFormer3D subfolder, try final if best missing)
 candidates = [
     ROOT / 'checkpoints' / 'best_model.pth',
@@ -65,10 +67,23 @@ if args.tag:
 else:
     RESULTS_DIR = DEFAULT_RESULTS_DIR
 
+import yaml
+
+# ... existing code ...
+
+# Charger la configuration pour récupérer les paramètres d'inférence
+with open(CONFIG, 'r') as f:
+    config = yaml.safe_load(f) or {}
+
+inference_params = config.get('inference_parameters', {})
+batch_size = inference_params.get('batch_size', 1)
+device = inference_params.get('device', 'cuda')
+save_predictions = inference_params.get('save_predictions', True)
+save_probabilities = inference_params.get('save_probabilities', False)
+threshold = inference_params.get('threshold', 0.5)
+
 if VERBOSITY != 'quiet':
-    print(f"Using CSV: {CSV}")
-    print(f"Using checkpoint: {CHECKPOINT}")
-    print(f"Using config: {CONFIG}")
+    print(f"Paramètres d'inférence: device={device}, batch_size={batch_size}, save_predictions={save_predictions}, save_probabilities={save_probabilities}, threshold={threshold}")
 
 if not CSV.exists():
     raise FileNotFoundError(f"Test CSV not found: {CSV}")
@@ -78,14 +93,7 @@ if not CHECKPOINT.exists():
 if not INFER_SCRIPT.exists():
     raise FileNotFoundError(f"Inference script not found: {INFER_SCRIPT}")
 
-failed = []
-with open(CSV, 'r', newline='') as f:
-    reader = csv.DictReader(f)
-    rows = list(reader)
-
-if VERBOSITY != 'quiet':
-    print(f"Found {len(rows)} cases in {CSV}")
-for row in tqdm(rows, desc="Inference", unit="case"):
+def process_inference(row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RESULTS_DIR, batch_size, device, save_predictions, save_probabilities, threshold):
     data_path = row['data_path']
     case = row['case_name']
     # Normalize data_path: if relative to project root, convert
@@ -98,22 +106,45 @@ for row in tqdm(rows, desc="Inference", unit="case"):
     cmd = [sys.executable, str(INFER_SCRIPT), '--config', str(CONFIG), '--checkpoint', str(CHECKPOINT), '--input_dir', str(input_dir), '--output_dir', str(out)]
     # Always pass verbosity to child script so behavior is consistent
     cmd.extend(['--verbosity', VERBOSITY])
-    # tqdm affiche déjà le contexte, on réduit les prints pour limiter le bruit
+    # Ajouter les paramètres d'inférence
+    cmd.extend(['--batch_size', str(batch_size), '--device', device, '--threshold', str(threshold)])
+    if save_predictions:
+        cmd.append('--save_predictions')
+    if save_probabilities:
+        cmd.append('--save_probabilities')
+
+    t0 = time.time()
     try:
-        t0 = time.time()
-        p = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True)
         duration = time.time() - t0
         if VERBOSITY == 'debug':
-            tqdm.write(f"[debug] Inference {case} duration: {duration:.3f}s")
-        if p.stdout and VERBOSITY != 'quiet':
-            tqdm.write(p.stdout)
-        if p.stderr:
-            tqdm.write('stderr: ' + p.stderr)
-    except subprocess.CalledProcessError as e:
-        tqdm.write(f"Inference failed for {case}: returncode {e.returncode}")
-        tqdm.write('stdout: ' + (e.stdout or ''))
-        tqdm.write('stderr: ' + (e.stderr or ''))
-        failed.append(case)
+            print(f"[debug] Inference {case} duration: {duration:.3f}s")
+        if res.returncode != 0:
+            print(f"Inference failed for {case}: returncode {res.returncode}")
+            if VERBOSITY != 'quiet':
+                print(res.stderr)
+            return case  # failed
+        return None
+    except Exception as e:
+        print(f"Inference failed for {case}: {e}")
+        return case
+
+failed = []
+with open(CSV, 'r', newline='') as f:
+    reader = csv.DictReader(f)
+    rows = list(reader)
+
+if VERBOSITY != 'quiet':
+    print(f"Found {len(rows)} cases in {CSV}")
+
+# Parallel processing
+max_workers = os.cpu_count() or 4
+with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    future_to_row = {executor.submit(process_inference, row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RESULTS_DIR, batch_size, device, save_predictions, save_probabilities, threshold): row for row in rows}
+    for future in tqdm(concurrent.futures.as_completed(future_to_row), total=len(rows), desc="Inference", unit="case"):
+        failed_case = future.result()
+        if failed_case:
+            failed.append(failed_case)
 
 print('\nBatch inference completed')
 if failed:
