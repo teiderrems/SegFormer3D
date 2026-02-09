@@ -301,8 +301,15 @@ def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", tra
 
     return True
 
-def train_model(architecture, config_path, checkpoint_path=None):
-    """Entraîne le modèle pour une architecture donnée"""
+def train_model(architecture, config_path, checkpoint_path=None, resume_checkpoint=None):
+    """Entraîne le modèle pour une architecture donnée.
+    
+    Args:
+        architecture: Nom de l'architecture.
+        config_path: Chemin vers la config YAML.
+        checkpoint_path: Checkpoint pour le fine-tuning (reset optimiseur).
+        resume_checkpoint: Checkpoint pour reprendre l'entraînement (restaure tout).
+    """
     # Trouver le script d'entraînement centralisé
     train_script = Path("train_scripts") / "trainer_ddp.py"
     if not train_script.exists():
@@ -312,12 +319,17 @@ def train_model(architecture, config_path, checkpoint_path=None):
     # Commande d'entraînement
     absolute_config = Path(config_path).resolve()
     command = f"{sys.executable} {train_script} --config {absolute_config}"
-    if checkpoint_path:
+    if resume_checkpoint:
+        absolute_resume = Path(resume_checkpoint).resolve()
+        command += f" --resume {absolute_resume}"
+    elif checkpoint_path:
         absolute_checkpoint = Path(checkpoint_path).resolve()
         command += f" --checkpoint {absolute_checkpoint}"
 
     log_section(pipeline_logger, f"Entraînement {architecture}")
-    if checkpoint_path:
+    if resume_checkpoint:
+        pipeline_logger.info(f"Reprise de l'entraînement depuis: {resume_checkpoint}")
+    elif checkpoint_path:
         pipeline_logger.info(f"Fine-tuning depuis: {checkpoint_path}")
     pipeline_logger.debug(f"Commande: {command}")
     result = subprocess.run(command, shell=True, cwd=str(Path(__file__).parent))
@@ -428,6 +440,8 @@ def main():
                         help="Liste de checkpoints à inférer (ex: best_model final_model). Si non fourni, utilise la détection automatique")
     parser.add_argument('--finetune_checkpoint', type=str, default=None,
                         help="Chemin vers un checkpoint pour le fine-tuning (remplace l'entraînement from scratch)")
+    parser.add_argument('--resume_checkpoint', type=str, default=None,
+                        help="Chemin vers un checkpoint pour reprendre l'entraînement à l'époque d'interruption (restaure modèle, optimiseur, scheduler, métriques)")
     parser.add_argument('--visualize', action='store_true', help='Générer visualisations et métriques après inférence')
     parser.add_argument('--test_data_dir', type=str, help='Répertoire des données de test (remplace la config)')
     parser.add_argument('--skip_volume', action='store_true', help='Ignorer les visualisations volumétriques 3D pour la génération des visualisations')
@@ -567,7 +581,7 @@ def main():
             pipeline_logger.error(f"Erreur injection augmentations: {e}")
             train_cfg_to_use = str(config_path)
 
-        if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint):
+        if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint, args.resume_checkpoint):
             pipeline_logger.error(f"Échec de l'entraînement pour {arch}")
             continue
 
