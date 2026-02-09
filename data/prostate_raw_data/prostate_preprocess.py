@@ -67,7 +67,9 @@ class ProstatePreprocessor:
         self,
         target_size: int = 96,
         resample_mode: str = "linear",
-        normalize_method: str = "minmax"
+        normalize_method: str = "minmax",
+        crop_to_prostate: bool = False,
+        crop_margin: int = 2
     ) -> None:
         """
         Initialise le préprocessor.
@@ -76,10 +78,16 @@ class ProstatePreprocessor:
             target_size (int): Taille cible pour resample (défaut: 96).
             resample_mode (str): Mode de resampling ("linear", "nearest").
             normalize_method (str): Méthode de normalisation ("minmax", "zscore").
+            crop_to_prostate (bool): Si True, supprime les slices axiales sans prostate
+                avant le resampling pour concentrer la résolution sur la région d'intérêt.
+            crop_margin (int): Nombre de slices de marge à conserver de chaque côté
+                de la région prostatique lors du cropping (défaut: 2).
         """
         self.target_size = target_size
         self.resample_mode = resample_mode
         self.normalize_method = normalize_method
+        self.crop_to_prostate = crop_to_prostate
+        self.crop_margin = crop_margin
     
     def load_nifti(self, filepath: str) -> np.ndarray:
         """Charge un fichier nifti (.nii.gz)."""
@@ -140,6 +148,69 @@ class ProstatePreprocessor:
         
         return seg_combined.astype(np.float32)
     
+    def crop_to_prostate_region(
+        self,
+        volumes: list,
+        segmentation: np.ndarray,
+        margin: int = 2
+    ) -> Tuple[list, np.ndarray, Dict[str, Any]]:
+        """
+        Supprime les slices axiales (axe 0 = profondeur) qui ne contiennent
+        aucun voxel de prostate, avant le resampling.
+
+        Cela permet de concentrer la résolution du volume interpolé sur la
+        région d'intérêt plutôt que de gaspiller des voxels sur des slices vides.
+
+        Args:
+            volumes: Liste de volumes 3D (D, H, W) à cropper (T2, ADC, etc.).
+            segmentation: Masque de segmentation (D, H, W) avec labels >= 1 pour la prostate.
+            margin: Nombre de slices supplémentaires à garder de chaque côté.
+
+        Returns:
+            Tuple (volumes_croppés, segmentation_croppée, infos_crop)
+        """
+        # Identifier les slices contenant de la prostate (label > 0)
+        prostate_mask = segmentation > 0
+        slices_with_prostate = np.any(prostate_mask, axis=(1, 2))  # (D,)
+
+        if not np.any(slices_with_prostate):
+            # Aucune prostate détectée : on garde tout le volume
+            warnings.warn("Aucune slice contenant de la prostate détectée, conservation du volume entier")
+            crop_info = {
+                "cropped": False,
+                "original_depth": segmentation.shape[0],
+                "cropped_depth": segmentation.shape[0],
+                "slice_start": 0,
+                "slice_end": segmentation.shape[0],
+                "slices_removed": 0
+            }
+            return volumes, segmentation, crop_info
+
+        # Trouver l'étendue des slices contenant la prostate
+        prostate_indices = np.where(slices_with_prostate)[0]
+        slice_start = int(prostate_indices[0])
+        slice_end = int(prostate_indices[-1]) + 1  # exclusif
+
+        # Appliquer la marge
+        depth = segmentation.shape[0]
+        slice_start = max(0, slice_start - margin)
+        slice_end = min(depth, slice_end + margin)
+
+        # Cropper tous les volumes et la segmentation
+        cropped_volumes = [vol[slice_start:slice_end, :, :] for vol in volumes]
+        cropped_seg = segmentation[slice_start:slice_end, :, :]
+
+        crop_info = {
+            "cropped": True,
+            "original_depth": depth,
+            "cropped_depth": slice_end - slice_start,
+            "slice_start": slice_start,
+            "slice_end": slice_end,
+            "slices_removed": depth - (slice_end - slice_start)
+        }
+
+        return cropped_volumes, cropped_seg, crop_info
+
     def resample_volume(
         self,
         volume: np.ndarray,
@@ -279,6 +350,17 @@ class ProstatePreprocessor:
             # Charge la segmentation (multi-label ou fichiers séparés)
             seg = self._load_segmentation(case_dir, case_name)
             
+            # Optionnel : supprimer les slices axiales sans prostate avant resampling
+            crop_info = None
+            if self.crop_to_prostate:
+                volumes_to_crop = [t2] + ([adc] if adc is not None else [])
+                cropped_volumes, seg, crop_info = self.crop_to_prostate_region(
+                    volumes_to_crop, seg, margin=self.crop_margin
+                )
+                t2 = cropped_volumes[0]
+                if adc is not None:
+                    adc = cropped_volumes[1]
+            
             # Resample à la taille cible
             target = (self.target_size, self.target_size, self.target_size)
             t2_resampled = self.resample_volume(t2, target, order=1)
@@ -337,6 +419,8 @@ class ProstatePreprocessor:
                 "bandelettes_voxels": bandelettes_count,
                 "total_voxels": int(np.prod(seg_labels.shape)),
             }
+            if crop_info is not None:
+                result["stats"]["crop_info"] = crop_info
         
         except Exception as e:
             result["success"] = False
@@ -379,6 +463,17 @@ def main():
         action="store_true",
         help="Saute les patients déjà prétraités"
     )
+    parser.add_argument(
+        "--crop_to_prostate",
+        action="store_true",
+        help="Supprimer les slices axiales sans prostate avant le resampling"
+    )
+    parser.add_argument(
+        "--crop_margin",
+        type=int,
+        default=2,
+        help="Nombre de slices de marge autour de la prostate lors du cropping (défaut: 2)"
+    )
     
     args = parser.parse_args()
     
@@ -388,7 +483,9 @@ def main():
     # Initialise le préprocessor
     preprocessor = ProstatePreprocessor(
         target_size=args.target_size,
-        normalize_method=args.normalize_method
+        normalize_method=args.normalize_method,
+        crop_to_prostate=args.crop_to_prostate,
+        crop_margin=args.crop_margin
     )
     
     # Trouve tous les répertoires de patients
@@ -404,7 +501,10 @@ def main():
     print(f"   Entrée: {args.input_dir}")
     print(f"   Sortie: {args.output_dir}")
     print(f"   Taille cible: {args.target_size}x{args.target_size}x{args.target_size}")
-    print(f"   Normalisation: {args.normalize_method}\n")
+    print(f"   Normalisation: {args.normalize_method}")
+    if args.crop_to_prostate:
+        print(f"   Crop prostate: activé (marge={args.crop_margin} slices)")
+    print()
     
     # Prétraite chaque patient
     results = []

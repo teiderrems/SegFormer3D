@@ -36,7 +36,9 @@ def load_pipeline_config(config_path):
         'preprocessing': {
             'target_size': 96,
             'normalize_method': 'minmax',
-            'skip_existing': True
+            'skip_existing': True,
+            'crop_to_prostate': False,
+            'crop_margin': 2
         },
         'splits': {
             'split_type': 'fixed',
@@ -270,7 +272,7 @@ def run_command(command, cwd=None, description=""):
             pipeline_logger.error(f"Erreur: {e.stderr.strip()}")
         return False
 
-def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42, target_size=96, normalize_method="minmax", skip_existing=True):
+def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42, target_size=96, normalize_method="minmax", skip_existing=True, crop_to_prostate=False, crop_margin=2):
     """Prétraite les données pour une architecture donnée et génère les CSV"""
     # Vérifier le script de prétraitement centralisé
     preprocess_script = Path("data") / "prostate_raw_data" / "prostate_preprocess.py"
@@ -286,6 +288,8 @@ def preprocess_data(architecture, input_dir, output_dir, split_type="fixed", tra
     command = f"{sys.executable} {preprocess_script} --input_dir {input_dir} --output_dir {output_dir} --target_size {target_size} --normalize_method {normalize_method}"
     if skip_existing:
         command += " --skip_existing"
+    if crop_to_prostate:
+        command += f" --crop_to_prostate --crop_margin {crop_margin}"
 
     if not run_command(command, cwd=str(Path(__file__).parent), description=f"Prétraitement des données pour {architecture} (taille: {target_size}x{target_size}x{target_size})"):
         return False
@@ -432,6 +436,10 @@ def main():
 
     # Option pour activer/désactiver les augmentations de données au niveau pipeline
     parser.add_argument('--disable_augmentations', action='store_true', help='Désactiver les augmentations de données pendant l\'entraînement')
+    parser.add_argument('--crop_to_prostate', action='store_true',
+                       help='Supprimer les slices axiales sans prostate avant le resampling')
+    parser.add_argument('--crop_margin', type=int,
+                       help='Nombre de slices de marge autour de la prostate lors du cropping (défaut: 2, remplace la config)')
 
     args = parser.parse_args()
 
@@ -473,6 +481,10 @@ def main():
         config['preprocessing']['target_size'] = args.target_size
     if args.skip_preprocess:
         config['advanced']['skip_preprocess'] = True
+    if args.crop_to_prostate:
+        config['preprocessing']['crop_to_prostate'] = True
+    if args.crop_margin is not None:
+        config['preprocessing']['crop_margin'] = args.crop_margin
 
     # Créer les répertoires nécessaires
     Path(config['paths']['preprocessed_data_dir']).mkdir(parents=True, exist_ok=True)
@@ -486,6 +498,8 @@ def main():
     pipeline_logger.info(f"  Données prétraitées: {config['paths']['preprocessed_data_dir']}")
     ts = config['preprocessing']['target_size']
     pipeline_logger.info(f"  Taille des volumes: {ts}x{ts}x{ts}")
+    crop_status = 'Activé' if config['preprocessing'].get('crop_to_prostate', False) else 'Désactivé'
+    pipeline_logger.info(f"  Crop prostate: {crop_status}" + (f" (marge={config['preprocessing'].get('crop_margin', 2)} slices)" if config['preprocessing'].get('crop_to_prostate', False) else ""))
     pipeline_logger.info(f"  Type de split: {config['splits']['split_type']}")
     if config['splits']['split_type'] == 'fixed':
         pipeline_logger.info(f"  Ratios: Train={config['splits']['train_ratio']}, Val={config['splits']['val_ratio']}, Test={config['splits']['test_ratio']}")
@@ -511,7 +525,9 @@ def main():
                                  config['splits']['val_ratio'], config['splits']['test_ratio'],
                                  config['splits']['k_folds'], config['splits']['random_seed'],
                                  config['preprocessing']['target_size'], config['preprocessing']['normalize_method'],
-                                 config['preprocessing']['skip_existing']):
+                                 config['preprocessing']['skip_existing'],
+                                 config['preprocessing'].get('crop_to_prostate', False),
+                                 config['preprocessing'].get('crop_margin', 2)):
                 pipeline_logger.error(f"Échec du prétraitement pour {arch}")
                 continue
 

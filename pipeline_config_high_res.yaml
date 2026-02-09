@@ -5,6 +5,8 @@ preprocessing:
   target_size: 128         # Haute résolution pour meilleure précision
   normalize_method: "zscore"  # Normalisation z-score pour haute résolution
   skip_existing: true
+  crop_to_prostate: true       # Concentrer la résolution sur la prostate
+  crop_margin: 3               # Marge légèrement plus large pour haute résolution
 
 splits:
   split_type: "kfold"      # Cross-validation pour évaluation robuste

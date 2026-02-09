@@ -16,6 +16,14 @@ preprocessing:
   # Sauter les patients déjà prétraités (évite le recalcul)
   skip_existing: true
 
+  # Supprimer les slices axiales sans prostate avant le resampling
+  # Permet de concentrer la résolution sur la région d'intérêt
+  crop_to_prostate: false
+
+  # Nombre de slices de marge à conserver autour de la prostate lors du cropping
+  # Utilisé uniquement si crop_to_prostate est activé
+  crop_margin: 2
+
 # === PARAMÈTRES DES SPLITS D'ENTRAÎNEMENT ===
 splits:
   # Type de split: 'fixed' pour train/val fixe, 'kfold' pour cross-validation
