@@ -141,6 +141,16 @@ python pipeline.py \
     --finetune_checkpoint ./checkpoints/SegFormer3D/best_model.pth \
     --target_size 128
 
+# Reprendre un entraînement interrompu (à l'époque exacte d'interruption)
+# Restaure : modèle, optimiseur, scheduler, métriques, numéro d'époque
+python pipeline.py \
+    --skip_preprocess \
+    --resume_checkpoint ./checkpoints/best_model.pth
+
+# Prétraitement avec cropping prostate (supprime les slices sans prostate)
+python pipeline.py \
+    --crop_to_prostate \
+    --crop_margin 3
 ```
 
 ### Utilisation via Makefile
@@ -231,7 +241,13 @@ python scripts/run_visualizations_all.py --test_data_dir ./data/preprocessed_dat
 
 - `--checkpoints` : Liste de checkpoints à inférer (ex: `--checkpoints best_model final_model`). Si non fournie, la pipeline essaie par défaut `best_model` puis `final_model`.
 
-- `--finetune_checkpoint` : Chemin vers un checkpoint pour le fine-tuning (permet de continuer l'entraînement à partir d'un modèle pré-entraîné).
+- `--finetune_checkpoint` : Chemin vers un checkpoint pour le fine-tuning (permet de continuer l'entraînement à partir d'un modèle pré-entraîné, reset optimiseur/scheduler).
+
+- `--resume_checkpoint` : Chemin vers un checkpoint pour reprendre l'entraînement à l'époque exacte d'interruption (restaure modèle, optimiseur, scheduler, métriques). Mutuellement exclusif avec `--finetune_checkpoint`.
+
+- `--crop_to_prostate` : Supprimer les slices axiales sans prostate avant le resampling (réduit le volume utile).
+
+- `--crop_margin` : Nombre de slices de marge autour de la prostate lors du cropping (défaut: 2).
 
 - `--visualize` : Générer visualisations et métriques après inférence (utilise `scripts/run_visualizations_all.py`).
 
@@ -247,6 +263,12 @@ python scripts/run_visualizations_all.py --test_data_dir ./data/preprocessed_dat
 
 ```bash
 python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --local_rank 0
+```
+
+- Pour reprendre un entraînement interrompu (restaure tout : modèle + optimiseur + scheduler + époque) :
+
+```bash
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --resume checkpoints/best_model.pth
 ```
 
 - Le `Makefile` fournit la cible `train-local` qui exécute la commande ci-dessus :
@@ -292,6 +314,10 @@ preprocessing:
   normalize_method: "minmax"  # 'minmax' ou 'zscore'
 
   skip_existing: true      # Sauter les patients déjà prétraités
+
+  crop_to_prostate: false  # Supprimer les slices sans prostate avant resampling
+
+  crop_margin: 2           # Nombre de slices de marge autour de la prostate
 
 
 
@@ -377,6 +403,8 @@ python pipeline.py \
 ### 1. Prétraitement
 
 - Conversion NIfTI → PyTorch tensors
+
+- Suppression optionnelle des slices sans prostate (`crop_to_prostate`)
 
 - Resampling à 96x96x96
 
@@ -781,6 +809,8 @@ Pour modifier les paramètres :
 -  **Documentation enrichie** dans tous les README
 
 -  **Pipeline end-to-end** : du prétraitement NIfTI à la visualisation finale
+-  **Reprise d'entraînement** : `--resume` / `--resume_checkpoint` pour continuer à l'époque exacte d'interruption
+-  **Crop prostate** : `--crop_to_prostate` pour supprimer les slices sans prostate avant resampling
 
 
 

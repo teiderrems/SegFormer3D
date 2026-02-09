@@ -32,6 +32,10 @@ Ce projet fournit une **pipeline entièrement automatisée** allant du prétrait
 
 - ** Suivi d'entraînement** : Logs détaillés et checkpoints automatiques
 
+- ** Reprise d'entraînement** : Continuer exactement à l'époque d'interruption (--resume)
+
+- ** Crop prostate** : Suppression optionnelle des slices sans prostate avant le resampling
+
 
 
 ##  Architectures disponibles
@@ -115,6 +119,15 @@ python pipeline.py
 # Désactiver toutes les augmentations (utile pour tests / comparaisons)
 python pipeline.py --disable_augmentations
 
+# Reprendre un entraînement interrompu (à l'époque exacte d'interruption)
+python pipeline.py --skip_preprocess --resume_checkpoint checkpoints/best_model.pth
+
+# Fine-tuning à partir d'un checkpoint (reset optimiseur, repart à l'époque 0)
+python pipeline.py --skip_preprocess --finetune_checkpoint checkpoints/best_model.pth
+
+# Cropping prostate (supprimer les slices sans prostate avant resampling)
+python pipeline.py --crop_to_prostate --crop_margin 3
+
 
 # Configuration haute résolution (128x128x128)
 
@@ -173,7 +186,8 @@ python create_prostate_splits.py --input_dir ../prostate_preprocessed --stratifi
 cd ../..
 
 python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml
-
+# Reprendre un entraînement interrompu
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --resume checkpoints/best_model.pth
 
 
 # 4. Inférence
@@ -270,6 +284,10 @@ preprocessing:
   normalize_method: "minmax"
 
   skip_existing: true
+
+  crop_to_prostate: false  # Supprimer les slices sans prostate avant resampling
+
+  crop_margin: 2           # Nombre de slices de marge autour de la prostate
 
 
 
@@ -619,6 +637,8 @@ visualizations/
 
 - **Multi-GPU** : DDP pour entraînement distribué
 
+- **Reprise d'entraînement** : `--resume` pour continuer à l'époque exacte d'interruption (restaure modèle, optimiseur, scheduler, métriques)
+
 
 
 ##  Résultats typiques
@@ -696,6 +716,12 @@ visualizations/
 - **Flexibilité maximale** : Support splits fixes et cross-validation
 
 - **Reproductibilité garantie** : Seeds configurables pour résultats cohérents
+
+- **Reprise d'entraînement** : `--resume` restaure modèle, optimiseur, scheduler et métriques pour continuer à l'époque exacte d'interruption
+
+- **Crop prostate** : `--crop_to_prostate` supprime les slices axiales sans prostate avant le resampling, concentrant l'information utile
+
+- **Commentaires détaillés** : Docstrings complètes dans le code d'entraînement (`trainer_ddp.py`)
 
 
 
