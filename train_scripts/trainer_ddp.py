@@ -28,6 +28,7 @@ Utilisation :
 import os
 import sys
 import torch
+from pathlib import Path
 try:
     import evaluate  # Bibliothèque HuggingFace Evaluate (optionnelle)
 except Exception:
