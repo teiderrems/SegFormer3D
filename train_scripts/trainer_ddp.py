@@ -307,6 +307,15 @@ class Segmentation_Trainer:
         self.early_stopping_counter = 0
         self.early_stop = False
 
+        # ── Initialisation du scheduler ──
+        # Comme on reprend après le warmup, on assigne directement le training_scheduler.
+        # Si on est encore dans la phase de warmup, on assigne le warmup_scheduler.
+        if self.warmup_enabled and self.start_epoch < self.warmup_epochs:
+            self.scheduler = self.warmup_scheduler
+        else:
+            self.scheduler = self.training_scheduler
+        self.logger.info(f"Scheduler actif: {type(self.scheduler).__name__}")
+
     def _create_ema_model(self) -> torch.nn.Module:
         """Crée un modèle EMA (Exponential Moving Average).
 
@@ -1201,6 +1210,13 @@ class AutoEncoder_Trainer:
             f"Reprise à l'époque {self.start_epoch}/{self.num_epochs} "
             f"(best_ssim={self.best_val_iou:.4f}, best_loss={self.best_val_loss:.6f})"
         )
+
+        # ── Initialisation du scheduler ──
+        if self.warmup_enabled and self.start_epoch < self.warmup_epochs:
+            self.scheduler = self.warmup_scheduler
+        else:
+            self.scheduler = self.training_scheduler
+        self.accelerator.print(f"Scheduler actif: {type(self.scheduler).__name__}")
 
     def _create_ema_model(self, gpu_id: int) -> torch.nn.Module:
         """Crée un modèle EMA sur le GPU spécifié.
