@@ -60,6 +60,22 @@ Ce projet fournit une **pipeline entièrement automatisée** allant du prétrait
 
 
 
+## Télécharger les données brutes
+
+Les données NIfTI non prétraitées sont disponibles ici :
+
+**[Télécharger les données (Google Drive)](https://drive.google.com/drive/folders/1YqhVbcLjrRdp5iyTsD68H_rYCfl8S7B0?usp=sharing)**
+
+Placez les dossiers patients téléchargés dans `data/raw_prostate/`.
+
+## Télécharger le meilleur modèle
+
+Le meilleur checkpoint pré-entraîné est disponible ici :
+
+**[Télécharger le modèle (Google Drive)](https://drive.google.com/drive/folders/1ljtUTyMSudLxjsUtNhPVjZgYvwvlvlUz?usp=sharing)**
+
+Placez les fichiers téléchargés dans le répertoire `checkpoints/`.
+
 ##  Prérequis
 
 
