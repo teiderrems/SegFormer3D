@@ -339,8 +339,11 @@ class ProstatePreprocessor:
             if not os.path.exists(t2_path):
                 raise FileNotFoundError(f"T2.nii.gz manquant dans {case_dir}")
             
-            # Charge les données T2 et ADC
-            t2 = self.load_nifti(t2_path)
+            # Charge les données T2 et ADC + métadonnées NIfTI
+            t2_img = nib.load(t2_path)
+            t2 = t2_img.get_fdata()
+            original_shape = t2.shape  # Shape originale avant tout prétraitement
+            original_affine = t2_img.affine.copy()  # Matrice affine pour reconstruction NIfTI
             
             # Charge ADC si disponible
             adc = None
@@ -402,6 +405,20 @@ class ProstatePreprocessor:
             
             torch.save(modalities_tensor, modality_path)
             torch.save(label_tensor, label_path)
+            
+            # Sauvegarde des métadonnées (shape originale, affine NIfTI)
+            # pour pouvoir reconstruire le volume à sa taille originale après inférence
+            metadata = {
+                'original_shape': original_shape,  # (D, H, W) avant prétraitement
+                'original_affine': original_affine,  # Matrice affine NIfTI 4x4
+                'target_size': self.target_size,
+                'normalize_method': self.normalize_method,
+                'crop_to_prostate': self.crop_to_prostate,
+            }
+            if crop_info is not None:
+                metadata['crop_info'] = crop_info
+            metadata_path = os.path.join(output_patient_dir, f"{case_name}_metadata.pt")
+            torch.save(metadata, metadata_path)
             
             # Collecte les stats
             result["success"] = True

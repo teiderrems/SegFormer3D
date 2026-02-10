@@ -11,6 +11,12 @@ import yaml
 from pathlib import Path
 import time
 
+try:
+    import nibabel as nib
+    HAS_NIBABEL = True
+except ImportError:
+    HAS_NIBABEL = False
+
 # Ajouter le répertoire parent au path
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -120,6 +126,50 @@ def predict_volume(model, volume, device='cpu'):
 
     return prediction
 
+
+def load_metadata(patient_dir):
+    """Charge les métadonnées du prétraitement (shape originale, affine NIfTI).
+    
+    Args:
+        patient_dir: Répertoire du patient prétraité
+    
+    Returns:
+        dict avec 'original_shape', 'original_affine', etc. ou None si non trouvé
+    """
+    patient_name = os.path.basename(patient_dir)
+    metadata_path = os.path.join(patient_dir, f"{patient_name}_metadata.pt")
+    if os.path.exists(metadata_path):
+        return torch.load(metadata_path, map_location='cpu', weights_only=False)
+    return None
+
+
+def resize_prediction_to_original(prediction, original_shape):
+    """Redimensionne la prédiction à la taille originale du volume.
+    
+    Utilise l'interpolation nearest-neighbor pour préserver les labels entiers.
+    
+    Args:
+        prediction: Tensor (D, H, W) avec les labels prédits
+        original_shape: Tuple (D, H, W) de la taille originale
+    
+    Returns:
+        Tensor (D, H, W) redimensionné à la taille originale
+    """
+    current_shape = tuple(prediction.shape)
+    target_shape = tuple(original_shape[:3])  # (D, H, W)
+    
+    if current_shape == target_shape:
+        return prediction
+    
+    # Ajouter les dimensions batch et channel pour interpolate: (1, 1, D, H, W)
+    pred_5d = prediction.float().unsqueeze(0).unsqueeze(0)
+    resized = torch.nn.functional.interpolate(
+        pred_5d,
+        size=target_shape,
+        mode='nearest'
+    )
+    return resized.squeeze(0).squeeze(0).long()
+
 def main():
     parser = argparse.ArgumentParser(description="Inférence SegFormer3D")
     parser.add_argument("--config", required=True, help="Chemin vers la configuration")
@@ -175,9 +225,21 @@ def main():
     inference_logger.info(f"Prédiction faite: shape={prediction.shape} ({inference_time:.2f}s)")
     inference_logger.debug(f"Prediction unique values: {np.unique(prediction.numpy())}")
 
-    # Sauvegarder la prédiction
+    # Charger les métadonnées pour restaurer la taille originale
+    metadata = load_metadata(args.input_dir)
+    if metadata is not None and 'original_shape' in metadata:
+        original_shape = metadata['original_shape']
+        inference_logger.info(f"Taille originale trouvée: {original_shape}")
+        prediction_original = resize_prediction_to_original(prediction, original_shape)
+        inference_logger.info(f"Prédiction redimensionnée: {tuple(prediction.shape)} -> {tuple(prediction_original.shape)}")
+    else:
+        inference_logger.warning("Métadonnées non trouvées, la prédiction sera sauvegardée à la taille du modèle")
+        prediction_original = prediction
+        original_shape = None
+
+    # Sauvegarder la prédiction (taille originale)
     output_path = os.path.join(args.output_dir, f"prediction_{os.path.basename(args.input_dir)}.pt")
-    torch.save(prediction, output_path)
+    torch.save(prediction_original, output_path)
     inference_logger.info(f"Prédiction sauvegardée: {output_path}")
     try:
         size = os.path.getsize(output_path)
@@ -185,13 +247,21 @@ def main():
     except Exception:
         pass
 
+    # Sauvegarder également en NIfTI si nibabel est disponible et les métadonnées existent
+    if HAS_NIBABEL and metadata is not None and 'original_affine' in metadata:
+        nifti_path = os.path.join(args.output_dir, f"prediction_{os.path.basename(args.input_dir)}.nii.gz")
+        affine = metadata['original_affine']
+        nifti_img = nib.Nifti1Image(prediction_original.numpy().astype(np.uint8), affine)
+        nib.save(nifti_img, nifti_path)
+        inference_logger.info(f"Prédiction NIfTI sauvegardée: {nifti_path}")
+
     # Statistiques
-    unique, counts = np.unique(prediction.numpy(), return_counts=True)
+    unique, counts = np.unique(prediction_original.numpy(), return_counts=True)
     inference_logger.info("Statistiques de prédiction:")
     class_names = ['Background', 'Prostate', 'Bandelettes']
     for i, (cls, count) in enumerate(zip(unique, counts)):
         if i < len(class_names):
-            percentage = count / prediction.numel() * 100
+            percentage = count / prediction_original.numel() * 100
             inference_logger.info(f"  {class_names[i]}: {percentage:.1f}%")
 
 if __name__ == "__main__":
