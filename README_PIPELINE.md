@@ -207,86 +207,197 @@ python scripts/run_visualizations_all.py --test_data_dir ./data/preprocessed_dat
 4) Comparer les dossiers `visualizations/SegFormer3D/with_aug/` et `visualizations/SegFormer3D/no_aug/` (graphs, `summary_metrics.json`, images comparatives) pour analyser l’effet des augmentations.
 
 
-### Arguments
+### Référence complète des arguments de `pipeline.py`
 
+Tous les arguments CLI de `pipeline.py`. Chaque argument surcharge la valeur correspondante dans le fichier de configuration YAML.
 
+#### Configuration générale
 
-- `--raw_data_dir` : Répertoire contenant les données brutes NIfTI
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--config` | `str` | `./pipeline_config.yaml` | Fichier de configuration YAML de la pipeline |
+| `--architectures` | `str` (liste) | config | Liste des architectures à traiter (ex: `--architectures SegFormer3D`) |
+| `--arch_config` | `str` | `None` | Fichier de configuration d'architecture à utiliser au lieu de `configs/config_<arch>.yaml` |
 
-- `--architectures` : Liste des architectures à traiter (défaut : toutes)
+#### Chemins des répertoires
 
-- `--preprocessed_data_dir` : Répertoire pour les données prétraitées
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--raw_data_dir` | `str` | config | Répertoire des données brutes NIfTI |
+| `--preprocessed_data_dir` | `str` | config | Répertoire pour les données prétraitées |
+| `--config_dir` | `str` | config | Répertoire des fichiers de configuration des modèles |
+| `--checkpoint_dir` | `str` | config | Répertoire pour sauvegarder les checkpoints |
+| `--results_dir` | `str` | config | Répertoire des résultats d'inférence |
+| `--test_data_dir` | `str` | config | Répertoire des données de test (si différent des données prétraitées) |
 
-- `--config_dir` : Répertoire des fichiers de configuration
+#### Prétraitement
 
-- `--checkpoint_dir` : Répertoire pour sauvegarder les checkpoints
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--skip_preprocess` | flag | `false` | Sauter l'étape de prétraitement (si déjà fait) |
+| `--target_size` | `int` | config | Taille cible pour le resampling des volumes (ex: 96, 128, 256) |
+| `--crop_to_prostate` | flag | `false` | Supprimer les slices axiales sans prostate avant le resampling |
+| `--crop_margin` | `int` | `2` | Nombre de slices de marge autour de la prostate lors du cropping |
 
-- `--results_dir` : Répertoire pour les résultats d'inférence
+#### Splits d'entraînement
 
-- `--skip_preprocess` : Sauter l'étape de prétraitement si déjà fait
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--split_type` | `fixed` ou `kfold` | config | Type de split des données |
+| `--train_ratio` | `float` | config (0.6) | Ratio pour l'ensemble d'entraînement (seulement `split_type=fixed`) |
+| `--val_ratio` | `float` | config (0.2) | Ratio pour l'ensemble de validation (seulement `split_type=fixed`) |
+| `--test_ratio` | `float` | config (0.2) | Ratio pour l'ensemble de test (seulement `split_type=fixed`) |
+| `--k_folds` | `int` | config (5) | Nombre de folds pour la cross-validation (seulement `split_type=kfold`) |
+| `--random_seed` | `int` | config (42) | Graine aléatoire pour la reproductibilité |
 
-- `--split_type` : Type de split ('fixed' pour train/val fixe, 'kfold' pour cross-validation)
+#### Entraînement et checkpoints
 
-- `--train_ratio` : Proportion pour l'entraînement (défaut: 0.7, seulement pour split_type='fixed')
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--finetune_checkpoint` | `str` | `None` | Checkpoint pour le **fine-tuning** : charge les poids du modèle, remet l'optimiseur et le scheduler à zéro, repart de l'époque 0 |
+| `--resume_checkpoint` | `str` | `None` | Checkpoint pour la **reprise d'entraînement** : restaure modèle + optimiseur + scheduler + métriques + numéro d'époque |
+| `--disable_augmentations` | flag | `false` | Désactiver les augmentations de données pendant l'entraînement (surcharge `augmentations.enabled` dans la config) |
 
-- `--val_ratio` : Proportion pour la validation (défaut: 0.2, seulement pour split_type='fixed')
+> **Attention** : `--finetune_checkpoint` et `--resume_checkpoint` sont **mutuellement exclusifs**. Utilisez `--finetune_checkpoint` pour réentraîner un modèle depuis un autre jeu de données, et `--resume_checkpoint` pour continuer un entraînement interrompu.
 
-- `--test_ratio` : Proportion pour le test (défaut: 0.1, seulement pour split_type='fixed')
+#### Inférence
 
-- `--k_folds` : Nombre de folds pour cross-validation (défaut: 5, seulement pour split_type='kfold')
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--checkpoints` | `str` (liste) | `best_model final_model` | Liste des noms de checkpoints pour lesquels lancer l'inférence (ex: `--checkpoints best_model final_model`). La pipeline cherche les fichiers `.pth` correspondants dans `checkpoint_dir` |
 
-- `--random_seed` : Seed pour reproductibilité (défaut: 42)
+> **Piège fréquent** : `--checkpoints` sert uniquement à choisir quels modèles **inférer**, ce n'est PAS l'option pour le fine-tuning. Pour du fine-tuning, utilisez `--finetune_checkpoint`.
 
-- `--target_size` : Taille cible pour le resampling des volumes (remplace la config)
+#### Visualisation
 
-- `--checkpoints` : Liste de checkpoints à inférer (ex: `--checkpoints best_model final_model`). Si non fournie, la pipeline essaie par défaut `best_model` puis `final_model`.
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--visualize` | flag | `false` | Générer les visualisations et métriques automatiquement après chaque inférence |
+| `--skip_volume` | flag | `false` | Ignorer les visualisations volumétriques 3D (plus rapide) |
+| `--vis_timeout` | `int` | `600` | Timeout (en secondes) pour la visualisation de chaque patient |
 
-- `--finetune_checkpoint` : Chemin vers un checkpoint pour le fine-tuning (permet de continuer l'entraînement à partir d'un modèle pré-entraîné, reset optimiseur/scheduler).
+---
 
-- `--resume_checkpoint` : Chemin vers un checkpoint pour reprendre l'entraînement à l'époque exacte d'interruption (restaure modèle, optimiseur, scheduler, métriques). Mutuellement exclusif avec `--finetune_checkpoint`.
+### Référence des arguments de `train_scripts/trainer_ddp.py`
 
-- `--crop_to_prostate` : Supprimer les slices axiales sans prostate avant le resampling (réduit le volume utile).
+Le script d'entraînement peut aussi être appelé directement (hors pipeline) :
 
-- `--crop_margin` : Nombre de slices de marge autour de la prostate lors du cropping (défaut: 2).
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--config` | `str` | **requis** | Chemin vers le fichier de configuration YAML de l'architecture |
+| `--local_rank` | `int` | `-1` | Rang local pour l'entraînement distribué (géré automatiquement par `torchrun`) |
+| `--checkpoint` | `str` | `None` | Checkpoint pour le fine-tuning (charge les poids, reset optimiseur) |
+| `--resume` | `str` | `None` | Checkpoint pour reprendre l'entraînement (restaure tout) |
 
-- `--visualize` : Générer visualisations et métriques après inférence (utilise `scripts/run_visualizations_all.py`).
+> **Note** : `--checkpoint` et `--resume` sont **mutuellement exclusifs**, comme leurs équivalents dans `pipeline.py`.
 
-- `--skip_volume` : Ignorer la visualisation volumétrique 3D pour accélérer la génération des visualisations.
+**Correspondance pipeline / trainer :**
 
-- `--vis_timeout` : Timeout par patient (en secondes) pour la génération de visualisations (par défaut 600 s).
+| `pipeline.py` | `trainer_ddp.py` | Effet |
+|----------------|-------------------|-------|
+| `--finetune_checkpoint` | `--checkpoint` | Fine-tuning (reset optimiseur, époque 0) |
+| `--resume_checkpoint` | `--resume` | Reprise exacte (restaure tout) |
 
-- `--disable_augmentations` : Désactive les augmentations de données pendant l'entraînement (utile pour tests/reproductibilité). Cette option surcharge la valeur `dataset_parameters.*.augmentations` définie dans les configs d'architecture.
+---
 
-**Exécution locale de l'entraînement**
-
-- Le script d'entraînement `train_scripts/trainer_ddp.py` attend le flag `--local_rank` (pas `--local`). Pour lancer l'entraînement local (non-DDP) utilisez :
+### Exécution directe de l'entraînement
 
 ```bash
+# Entraînement standard
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml
+
+# Entraînement local non-DDP (passer --local_rank 0)
 python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --local_rank 0
-```
 
-- Pour reprendre un entraînement interrompu (restaure tout : modèle + optimiseur + scheduler + époque) :
+# Fine-tuning depuis un checkpoint (charge les poids, reset optimiseur)
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --checkpoint checkpoints/best_model.pth
 
-```bash
+# Reprendre un entraînement interrompu (restaure modèle + optimiseur + scheduler + époque)
 python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --resume checkpoints/best_model.pth
 ```
 
-- Le `Makefile` fournit la cible `train-local` qui exécute la commande ci-dessus :
+### Exécution en arrière-plan (nohup)
+
+Pour les entraînements longs, utilisez `nohup` pour détacher le processus du terminal :
 
 ```bash
-make train-local
+# Fine-tuning en arrière-plan
+nohup python pipeline.py --config pipeline_config.yaml --skip_preprocess \
+    --finetune_checkpoint checkpoints/best_model.pth > finetune.log 2>&1 &
+
+# Reprise d'entraînement en arrière-plan
+nohup python pipeline.py --config pipeline_config.yaml --skip_preprocess \
+    --resume_checkpoint checkpoints/best_model.pth > resume.log 2>&1 &
+
+# Pipeline complète en arrière-plan
+nohup python pipeline.py --config pipeline_config.yaml > pipeline.log 2>&1 &
+
+# Suivre les logs en temps réel
+tail -f finetune.log
 ```
 
-- **Remarque importante** : installez d'abord PyTorch et les dépendances (voir `requirements.txt`) adaptées à votre configuration CUDA/Python :
+### Utilisation du Makefile
+
+Le `Makefile` fournit des cibles pratiques pour les tâches courantes :
 
 ```bash
-# Exemple (remplacez par la version CUDA pertinente)
+make help                    # Afficher toutes les cibles disponibles
+
+# Installation
+make install                 # Installer les dépendances de production
+make install-dev             # Installer les dépendances de développement
+
+# Pipeline complète
+make run-pipeline            # Pipeline standard (pipeline_config.yaml)
+make run-pipeline-highres    # Pipeline haute résolution (pipeline_config_high_res.yaml)
+
+# Étapes individuelles
+make preprocess              # Prétraiter les données brutes
+make splits                  # Générer les splits CSV stratifiés
+make train                   # Entraînement DDP
+make train-local             # Entraînement local (non-DDP, --local_rank 0)
+
+# Inférence
+make infer CHECKPOINT=checkpoints/best_model.pth   # Inférence avec un checkpoint spécifique
+make infer-all               # Inférence batch (scripts/run_inference_all.py)
+
+# Visualisations
+make visualize               # Visualisations par défaut
+make visualize-test TEST_DATA_DIR=/path/to/data RESULTS_SUBDIR=best_model VIS_TAG=best_model
+make visualize-config CONFIG=configs/config_segformer3d.yaml RESULTS_SUBDIR=best_model VIS_TAG=best_model
+
+# Tests et qualité
+make test                    # Suite de tests complète (pytest)
+make test-fast               # Tests rapides
+make lint                    # Linting (ruff)
+make format                  # Formatage du code (ruff)
+make clean                   # Nettoyer les caches
+```
+
+Variables configurables du Makefile :
+
+| Variable | Défaut | Description |
+|----------|--------|-------------|
+| `PY` | `python` | Interpréteur Python |
+| `CONFIG` | `configs/config_segformer3d.yaml` | Config d'architecture |
+| `ARCH` | `SegFormer3D` | Architecture active |
+| `PREP_INPUT` | `$(PWD)/data/raw_prostate` | Répertoire des données brutes |
+| `PREP_OUTPUT` | `$(PWD)/data/prostate_preprocessed` | Répertoire de sortie prétraitement |
+| `CHECKPOINT_DIR` | `$(PWD)/checkpoints` | Répertoire des checkpoints |
+| `RESULTS_DIR` | `$(PWD)/results` | Répertoire des résultats |
+| `TARGET_SIZE` | `96` | Taille cible pour le resampling |
+
+---
+
+**Remarque importante** : installez d'abord PyTorch et les dépendances (voir `requirements.txt`) adaptées à votre configuration CUDA/Python :
+
+```bash
 pip install -r requirements.txt
 # ou installez torch explicitement avec la bonne roue CUDA, par ex.:
 # pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
-- `--test_data_dir` : Répertoire des données de test (remplace `paths.test_data_dir` dans le fichier de config si fourni). Vous pouvez aussi passer `--test_data_dir` à `scripts/run_visualizations_all.py` (ou `--test_dir`/`--test_csv`) pour contrôler quelles données sont utilisées pour les visualisations.
+- `--test_data_dir` peut aussi être passé à `scripts/run_visualizations_all.py` (ou `--test_dir`/`--test_csv`) pour contrôler quelles données sont utilisées pour les visualisations.
 - `--config` sur `scripts/run_visualizations_all.py` : permet de fournir explicitement le fichier YAML d'architecture à utiliser pour détecter `test_dataset_args` (ex: `--config configs/config_segformer3d.yaml`).
 
 

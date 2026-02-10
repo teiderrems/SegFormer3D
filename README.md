@@ -102,10 +102,6 @@ pip install -r requirements.txt
 
 
 
-##  Utilisation rapide
-
-
-
 ### Pipeline complète automatisée
 
 
@@ -116,30 +112,13 @@ pip install -r requirements.txt
 
 python pipeline.py
 
-# Désactiver toutes les augmentations (utile pour tests / comparaisons)
-python pipeline.py --disable_augmentations
-
-# Reprendre un entraînement interrompu (à l'époque exacte d'interruption)
-python pipeline.py --skip_preprocess --resume_checkpoint checkpoints/best_model.pth
-
-# Fine-tuning à partir d'un checkpoint (reset optimiseur, repart à l'époque 0)
-python pipeline.py --skip_preprocess --finetune_checkpoint checkpoints/best_model.pth
-
-# Cropping prostate (supprimer les slices sans prostate avant resampling)
-python pipeline.py --crop_to_prostate --crop_margin 3
-
-
 # Configuration haute résolution (128x128x128)
 
 python pipeline.py --config pipeline_config_high_res.yaml
 
-
-
 # Personnalisation via ligne de commande
 
 python pipeline.py --target_size 128 --architectures SegFormer3D --split_type kfold
-
-
 
 # Configuration avancée avec arguments
 
@@ -159,7 +138,112 @@ python pipeline.py \
 
 ```
 
+### Fine-tuning et reprise d'entraînement
 
+```bash
+# Fine-tuning à partir d'un checkpoint (reset optimiseur, repart de l'époque 0)
+python pipeline.py --skip_preprocess --finetune_checkpoint checkpoints/best_model.pth
+
+# Reprendre un entraînement interrompu (restaure modèle + optimiseur + scheduler + époque)
+python pipeline.py --skip_preprocess --resume_checkpoint checkpoints/best_model.pth
+
+# Fine-tuning en arrière-plan (sessions longues)
+nohup python pipeline.py --config pipeline_config.yaml --skip_preprocess \
+    --finetune_checkpoint checkpoints/best_model.pth > finetune.log 2>&1 &
+
+# Suivre les logs en temps réel
+tail -f finetune.log
+```
+
+> **Attention** : `--finetune_checkpoint` et `--resume_checkpoint` sont **mutuellement exclusifs**.
+> - `--finetune_checkpoint` : charge les poids, remet optimiseur/scheduler à zéro, repart de l'époque 0.
+> - `--resume_checkpoint` : restaure l'état complet (modèle, optimiseur, scheduler, métriques, époque).
+
+> **Piège fréquent** : ne pas confondre `--checkpoints` (choisir quels modèles **inférer**) et `--finetune_checkpoint` (réentraîner depuis un checkpoint).
+
+### Augmentations et prétraitement
+
+```bash
+# Désactiver toutes les augmentations (utile pour tests / comparaisons)
+python pipeline.py --disable_augmentations
+
+# Cropping prostate (supprimer les slices sans prostate avant resampling)
+python pipeline.py --crop_to_prostate --crop_margin 3
+
+# Skip preprocessing (données déjà prétraitées)
+python pipeline.py --skip_preprocess
+```
+
+### Inférence et visualisation
+
+```bash
+# Inférence avec des checkpoints spécifiques
+python pipeline.py --skip_preprocess --checkpoints best_model final_model
+
+# Inférence + visualisations automatiques
+python pipeline.py --skip_preprocess --checkpoints best_model --visualize
+
+# Visualisations sans volumétrique 3D (plus rapide)
+python pipeline.py --skip_preprocess --checkpoints best_model --visualize --skip_volume
+```
+
+### Référence complète des arguments `pipeline.py`
+
+#### Configuration générale
+
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--config` | `str` | `./pipeline_config.yaml` | Fichier de configuration YAML |
+| `--architectures` | `str` (liste) | config | Architectures à traiter |
+| `--arch_config` | `str` | `None` | Config d'architecture personnalisée |
+
+#### Chemins
+
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--raw_data_dir` | `str` | config | Données brutes NIfTI |
+| `--preprocessed_data_dir` | `str` | config | Données prétraitées |
+| `--config_dir` | `str` | config | Configurations des modèles |
+| `--checkpoint_dir` | `str` | config | Checkpoints |
+| `--results_dir` | `str` | config | Résultats d'inférence |
+| `--test_data_dir` | `str` | config | Données de test |
+
+#### Prétraitement
+
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--skip_preprocess` | flag | `false` | Sauter le prétraitement |
+| `--target_size` | `int` | config | Taille des volumes (96, 128, 256) |
+| `--crop_to_prostate` | flag | `false` | Supprimer les slices sans prostate |
+| `--crop_margin` | `int` | `2` | Marge de slices autour de la prostate |
+
+#### Splits
+
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--split_type` | `fixed`/`kfold` | config | Type de split |
+| `--train_ratio` | `float` | config | Ratio entraînement (split fixed) |
+| `--val_ratio` | `float` | config | Ratio validation (split fixed) |
+| `--test_ratio` | `float` | config | Ratio test (split fixed) |
+| `--k_folds` | `int` | config | Nombre de folds (split kfold) |
+| `--random_seed` | `int` | config | Seed reproductibilité |
+
+#### Entraînement
+
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--finetune_checkpoint` | `str` | `None` | Fine-tuning (reset optimiseur, époque 0) |
+| `--resume_checkpoint` | `str` | `None` | Reprise exacte (restaure tout) |
+| `--disable_augmentations` | flag | `false` | Désactiver les augmentations |
+
+#### Inférence et visualisation
+
+| Argument | Type | Défaut | Description |
+|----------|------|--------|-------------|
+| `--checkpoints` | `str` (liste) | `best_model final_model` | Checkpoints à inférer |
+| `--visualize` | flag | `false` | Générer les visualisations après inférence |
+| `--skip_volume` | flag | `false` | Ignorer visualisations 3D |
+| `--vis_timeout` | `int` | `600` | Timeout par patient (secondes) |
 
 ### Utilisation manuelle par architecture
 
@@ -182,13 +266,27 @@ python create_prostate_splits.py --input_dir ../prostate_preprocessed --stratifi
 
 
 # 3. Entraînement
-
 cd ../..
-
 python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml
-# Reprendre un entraînement interrompu
+
+# Fine-tuning depuis un checkpoint (charge les poids, reset optimiseur)
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --checkpoint checkpoints/best_model.pth
+
+# Reprendre un entraînement interrompu (restaure tout)
 python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --resume checkpoints/best_model.pth
 
+# Entraînement local non-DDP
+python train_scripts/trainer_ddp.py --config configs/config_segformer3d.yaml --local_rank 0
+```
+
+**Correspondance des arguments pipeline / trainer :**
+
+| `pipeline.py` | `trainer_ddp.py` | Effet |
+|----------------|-------------------|-------|
+| `--finetune_checkpoint` | `--checkpoint` | Fine-tuning (reset optimiseur, époque 0) |
+| `--resume_checkpoint` | `--resume` | Reprise exacte (restaure tout) |
+
+```bash
 
 # 4. Inférence
 
