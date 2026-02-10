@@ -36,3 +36,27 @@ paths:
 advanced:
   skip_preprocess: false
   verbosity: 2
+
+# === AUGMENTATIONS DE DONNÉES ===
+augmentations:
+  enabled: true
+
+# === PARAMÈTRES DES DATASETS ===
+dataset_parameters:
+  dataset_type: "prostate_seg"
+  train_dataset_args:
+    train: true
+    debug_augment: false
+  val_dataset_args:
+    train: false
+    debug_augment: false
+  test_dataset_args:
+    train: false
+    debug_augment: false
+
+# === PARAMÈTRES DU DATALOADER ===
+dataloader:
+  batch_size: 1            # Batch size réduit pour haute résolution
+  shuffle: true
+  num_workers: 2           # Workers parallèles pour accélérer le chargement
+  drop_last: true

@@ -95,6 +95,51 @@ augmentations:
   # True = appliquer les augmentations sur l'ensemble d'entraînement (val = toujours sans augmentations)
   enabled: true
 
+# === PARAMÈTRES DES DATASETS ===
+# Ces paramètres sont injectés automatiquement dans la configuration d'architecture
+# (configs/config_<arch>.yaml) au lancement de la pipeline.
+# Ils surchargent les valeurs de dataset_parameters et dataloader de la config d'archi.
+dataset_parameters:
+  # Type de dataset (doit correspondre à un dataset enregistré dans dataloaders/)
+  dataset_type: "prostate_seg"
+
+  # Arguments du dataset d'entraînement
+  train_dataset_args:
+    # Le chemin root est automatiquement déduit de paths.preprocessed_data_dir
+    # Le split_file est automatiquement déduit de paths.preprocessed_data_dir + train.csv
+    train: true
+    # Les augmentations sont contrôlées par la section augmentations.enabled ci-dessus
+    # Mode debug: affiche si les augmentations modifient les images (pour les 5 premiers samples)
+    debug_augment: false
+
+  # Arguments du dataset de validation
+  val_dataset_args:
+    train: false
+    # Les augmentations sont toujours désactivées en validation
+    debug_augment: false
+
+  # Arguments du dataset de test
+  test_dataset_args:
+    train: false
+    debug_augment: false
+
+# === PARAMÈTRES DU DATALOADER ===
+dataloader:
+  # Taille du batch (surchargé par training.batch_size si défini)
+  batch_size: 1
+
+  # Mélanger les données d'entraînement à chaque époque
+  shuffle: true
+
+  # Nombre de workers pour le chargement parallèle des données
+  # 0 = chargement dans le processus principal (utile pour le debug)
+  # 2-4 = valeurs recommandées en production
+  num_workers: 0
+
+  # Supprimer le dernier batch s'il est incomplet
+  # Recommandé: true pour éviter les problèmes de taille de batch avec BatchNorm
+  drop_last: true
+
 # === PARAMÈTRES TRANSFORMER PAR DÉFAUT ===
 # Ces paramètres sont appliqués comme valeurs par défaut si une configuration
 # d'architecture spécifique ne les définit pas (ex: configs/config_segformer3d.yaml).
