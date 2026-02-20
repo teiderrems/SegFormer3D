@@ -5,18 +5,36 @@ Script de visualisation des résultats d'inférence SegFormer3D
 
 import os
 import argparse
-import torch
+try:
+    import torch
+except Exception:
+    torch = None
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import yaml
-from mpl_toolkits.mplot3d import Axes3D
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from scipy.spatial.distance import cdist
-from scipy.spatial import cKDTree
-from scipy import ndimage
-from skimage.metrics import structural_similarity as ssim
+try:
+    from mpl_toolkits.mplot3d import Axes3D
+except Exception:
+    Axes3D = None
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+except Exception:
+    go = None
+    make_subplots = None
+try:
+    from scipy.spatial.distance import cdist
+    from scipy.spatial import cKDTree
+    from scipy import ndimage
+except Exception:
+    cdist = None
+    cKDTree = None
+    ndimage = None
+try:
+    from skimage.metrics import structural_similarity as ssim
+except Exception:
+    ssim = None
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -558,6 +576,75 @@ def create_volume_visualization(prediction, modalities, labels, output_dir, pati
 
     vis_logger.info(f"Visualisation volumétrique sauvegardée: {output_path}")
 
+def apply_visualization_config_over_args(args, config):
+    """Override CLI args with values from YAML when present (YAML > CLI),
+    unless `--force-cli` was used together with an explicit CLI option (then
+    the CLI value is preserved).
+
+    Supported YAML keys (top-level `visualization` mapping):
+      - verbosity: 'quiet'|'normal'|'debug'
+      - volume_vis: bool
+      - interactive: bool
+      - compute_errors: bool
+      - voxel_spacing: str ("sx,sy,sz")
+      - output_dir: str
+
+    The function mutates `args` in-place and returns it for convenience.
+    """
+    import sys
+    viz_cfg = config.get('visualization', {}) if isinstance(config, dict) else {}
+
+    def cli_provided(name):
+        for a in sys.argv[1:]:
+            if a == name or a.startswith(name + "="):
+                return True
+        return False
+
+    def cli_value(name):
+        # Return the value passed to a CLI option like `--verbosity normal` or `--opt=val`
+        for i, a in enumerate(sys.argv[1:]):
+            if a == name and i + 2 <= len(sys.argv[1:]):
+                return sys.argv[1:][i + 1]
+            if a.startswith(name + "="):
+                return a.split("=", 1)[1]
+        return None
+
+    force = getattr(args, 'force_cli', False)
+
+    # If force is used and CLI explicitly provided flags, prefer those CLI values
+    if force:
+        if cli_provided('--volume_vis'):
+            args.volume_vis = True
+        if cli_provided('--interactive'):
+            args.interactive = True
+        if cli_provided('--compute_errors'):
+            args.compute_errors = True
+        if cli_provided('--verbosity'):
+            v = cli_value('--verbosity')
+            if v:
+                args.verbosity = v
+        if cli_provided('--output_dir'):
+            od = cli_value('--output_dir')
+            if od:
+                args.output_dir = od
+
+    # Apply YAML values unless the user forced CLI and explicitly provided the option
+    if 'verbosity' in viz_cfg and not (force and cli_provided('--verbosity')):
+        args.verbosity = viz_cfg['verbosity']
+    if 'volume_vis' in viz_cfg and not (force and cli_provided('--volume_vis')):
+        args.volume_vis = bool(viz_cfg['volume_vis'])
+    if 'interactive' in viz_cfg and not (force and cli_provided('--interactive')):
+        args.interactive = bool(viz_cfg['interactive'])
+    if 'compute_errors' in viz_cfg and not (force and cli_provided('--compute_errors')):
+        args.compute_errors = bool(viz_cfg['compute_errors'])
+    if 'voxel_spacing' in viz_cfg and not (force and cli_provided('--voxel_spacing')):
+        args.voxel_spacing = viz_cfg['voxel_spacing']
+    if 'output_dir' in viz_cfg and not (force and cli_provided('--output_dir')):
+        args.output_dir = viz_cfg['output_dir']
+
+    return args
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visualisation des résultats d'inférence SegFormer3D")
     parser.add_argument('--config', type=str, default='configs/config_segformer3d.yaml', help='Chemin vers le fichier de configuration')
@@ -569,10 +656,17 @@ def main():
     parser.add_argument('--compute_errors', action='store_true', help='Calculer et sauvegarder les erreurs de reconstruction / segmentation')
     parser.add_argument('--voxel_spacing', type=str, default=None, help='Voxel spacing en mm comme "sx,sy,sz" (x,y,z)')
     parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité: quiet|normal|debug')
+    parser.add_argument('--force-cli', action='store_true', help='Forcer les arguments CLI à remplacer les valeurs du YAML (par défaut: YAML > CLI)')
 
     args = parser.parse_args()
 
-    # Configurer le logger de visualisation
+    # Charger la configuration
+    config = load_config(args.config)
+
+    # Appliquer la priorité YAML > CLI pour les options de visualisation (respecte --force-cli)
+    args = apply_visualization_config_over_args(args, config)
+
+    # Configurer le logger de visualisation (après fusion YAML/CLI)
     global vis_logger
     level_map = {'quiet': 'WARNING', 'normal': 'INFO', 'debug': 'DEBUG'}
     vis_logger = get_logger(
@@ -580,8 +674,6 @@ def main():
         level=level_map.get(args.verbosity, 'INFO'),
     )
 
-    # Charger la configuration
-    config = load_config(args.config)
     patient_name = os.path.basename(args.input_dir)
 
     vis_logger.info("Génération des visualisations...")

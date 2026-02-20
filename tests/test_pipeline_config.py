@@ -96,3 +96,41 @@ def test_cli_applies_when_key_not_in_yaml(tmp_path):
 
     pipeline.apply_cli_overrides_with_yaml_priority(cfg, user_cfg_loaded, args)
     assert cfg['preprocessing']['target_size'] == 128
+
+
+def test_force_cli_allows_cli_override_for_paths(tmp_path, monkeypatch):
+    # YAML définit test_data_dir -> normalement YAML gagne, mais --force-cli + CLI explicite doit permettre l'override
+    tmp_yaml = tmp_path / "tmp_pipeline.yaml"
+    user_cfg = {'paths': {'test_data_dir': './data/my_test_set'}}
+    tmp_yaml.write_text(yaml.safe_dump(user_cfg))
+
+    cfg, user_cfg_loaded = pipeline.load_pipeline_config(str(tmp_yaml), return_user_config=True)
+
+    class Args: pass
+    args = Args()
+    args.test_data_dir = './data/cli_test_set'
+    args.force_cli = True
+    # other args default to None/False
+    args.disable_augmentations = False
+    args.architectures = None
+    args.raw_data_dir = None
+    args.preprocessed_data_dir = None
+    args.config_dir = None
+    args.checkpoint_dir = None
+    args.results_dir = None
+    args.split_type = None
+    args.train_ratio = None
+    args.val_ratio = None
+    args.test_ratio = None
+    args.k_folds = None
+    args.random_seed = None
+    args.target_size = None
+    args.skip_preprocess = False
+    args.crop_to_prostate = False
+    args.crop_margin = None
+
+    # Simulate that CLI explicitly provided --test_data_dir
+    monkeypatch.setattr('sys.argv', ['pipeline.py', '--test_data_dir', './data/cli_test_set', '--force-cli'])
+
+    pipeline.apply_cli_overrides_with_yaml_priority(cfg, user_cfg_loaded, args)
+    assert cfg['paths']['test_data_dir'] == './data/cli_test_set'  # CLI should win when force_cli is True

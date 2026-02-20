@@ -300,6 +300,26 @@ Le script d'entraînement peut aussi être appelé directement (hors pipeline) :
 
 ---
 
+### Priorité YAML vs CLI et option `--force-cli`
+
+- Par défaut les valeurs explicites du fichier YAML **priment** sur les arguments CLI pour assurer une configuration reproductible et centralisée (comportement appliqué à la pipeline, à l'inférence et aux visualisations).
+- Si vous **voulez** forcer un override depuis la ligne de commande (par exemple en CI ou run ponctuel), utilisez l'option `--force-cli` *en conjonction* avec l'argument CLI concerné. Exemples :
+
+  ```bash
+  # YAML définit device=cuda, mais on force CLI -> device=cpu
+  python inference_simple.py --config configs/config_segformer3d.yaml --device cpu --force-cli
+
+  # YAML définit test dataset, mais on force CLI -> use the CLI dataset
+  python scripts/run_visualizations_all.py --test_data_dir /path/to/other --force-cli
+  ```
+
+- Nouveaux champs de configuration disponibles :
+  - `inference_parameters` : définit `device`, `batch_size`, `save_predictions`, `save_probabilities`, `threshold`, `verbosity`.
+  - `visualization` : définit `volume_vis`, `interactive`, `compute_errors`, `voxel_spacing`, `output_dir`, `verbosity`.
+
+Ces ajouts facilitent la configuration complète depuis les fichiers YAML tout en laissant la possibilité d'overrides ponctuels via la CLI lorsque nécessaire.
+
+
 ### Exécution directe de l'entraînement
 
 ```bash

@@ -133,11 +133,15 @@ def load_pipeline_config(config_path, return_user_config=False):
 def apply_cli_overrides_with_yaml_priority(config, user_cfg, args):
     """
     Applique les arguments CLI au dictionnaire `config` **seulement si** la clé
-    correspondante n'est pas explicitement définie dans `user_cfg` (YAML).
+    correspondante n'est pas explicitement définie dans `user_cfg` (YAML),
+    sauf si l'utilisateur a passé `--force-cli` : dans ce cas les options CLI
+    explicites prennent priorité.
 
     - `config` est modifié in-place.
     - `user_cfg` doit être le dict tel que lu depuis le YAML (vide si aucun YAML).
     """
+    import sys
+
     def user_cfg_has(user_cfg_dict, key_path):
         cur = user_cfg_dict or {}
         for k in key_path:
@@ -146,43 +150,53 @@ def apply_cli_overrides_with_yaml_priority(config, user_cfg, args):
             cur = cur[k]
         return True
 
+    # Helper pour savoir si une option CLI a été explicitement fournie
+    def cli_provided(option_name):
+        for a in sys.argv[1:]:
+            if a == option_name or a.startswith(option_name + "="):
+                return True
+        return False
+
+    force = getattr(args, 'force_cli', False)
+
     # Appliquer les arguments CLI **seulement si** la clé correspondante n'est pas définie dans le YAML
-    if getattr(args, 'disable_augmentations', False) and not user_cfg_has(user_cfg, ['augmentations', 'enabled']):
+    # ou si --force-cli a été activé ET l'option CLI a été explicitement fournie.
+    if getattr(args, 'disable_augmentations', False) and (force and cli_provided('--disable_augmentations') or not user_cfg_has(user_cfg, ['augmentations', 'enabled'])):
         config['augmentations']['enabled'] = False
 
-    if getattr(args, 'architectures', None) and not user_cfg_has(user_cfg, ['architectures', 'enabled']):
+    if getattr(args, 'architectures', None) and (force and cli_provided('--architectures') or not user_cfg_has(user_cfg, ['architectures', 'enabled'])):
         config['architectures']['enabled'] = args.architectures
-    if getattr(args, 'raw_data_dir', None) and not user_cfg_has(user_cfg, ['paths', 'raw_data_dir']):
+    if getattr(args, 'raw_data_dir', None) and (force and cli_provided('--raw_data_dir') or not user_cfg_has(user_cfg, ['paths', 'raw_data_dir'])):
         config['paths']['raw_data_dir'] = args.raw_data_dir
-    if getattr(args, 'preprocessed_data_dir', None) and not user_cfg_has(user_cfg, ['paths', 'preprocessed_data_dir']):
+    if getattr(args, 'preprocessed_data_dir', None) and (force and cli_provided('--preprocessed_data_dir') or not user_cfg_has(user_cfg, ['paths', 'preprocessed_data_dir'])):
         config['paths']['preprocessed_data_dir'] = args.preprocessed_data_dir
-    if getattr(args, 'test_data_dir', None) and not user_cfg_has(user_cfg, ['paths', 'test_data_dir']):
+    if getattr(args, 'test_data_dir', None) and (force and cli_provided('--test_data_dir') or not user_cfg_has(user_cfg, ['paths', 'test_data_dir'])):
         config['paths']['test_data_dir'] = args.test_data_dir
-    if getattr(args, 'config_dir', None) and not user_cfg_has(user_cfg, ['paths', 'config_dir']):
+    if getattr(args, 'config_dir', None) and (force and cli_provided('--config_dir') or not user_cfg_has(user_cfg, ['paths', 'config_dir'])):
         config['paths']['config_dir'] = args.config_dir
-    if getattr(args, 'checkpoint_dir', None) and not user_cfg_has(user_cfg, ['paths', 'checkpoint_dir']):
+    if getattr(args, 'checkpoint_dir', None) and (force and cli_provided('--checkpoint_dir') or not user_cfg_has(user_cfg, ['paths', 'checkpoint_dir'])):
         config['paths']['checkpoint_dir'] = args.checkpoint_dir
-    if getattr(args, 'results_dir', None) and not user_cfg_has(user_cfg, ['paths', 'results_dir']):
+    if getattr(args, 'results_dir', None) and (force and cli_provided('--results_dir') or not user_cfg_has(user_cfg, ['paths', 'results_dir'])):
         config['paths']['results_dir'] = args.results_dir
-    if getattr(args, 'split_type', None) and not user_cfg_has(user_cfg, ['splits', 'split_type']):
+    if getattr(args, 'split_type', None) and (force and cli_provided('--split_type') or not user_cfg_has(user_cfg, ['splits', 'split_type'])):
         config['splits']['split_type'] = args.split_type
-    if getattr(args, 'train_ratio', None) is not None and not user_cfg_has(user_cfg, ['splits', 'train_ratio']):
+    if getattr(args, 'train_ratio', None) is not None and (force and cli_provided('--train_ratio') or not user_cfg_has(user_cfg, ['splits', 'train_ratio'])):
         config['splits']['train_ratio'] = args.train_ratio
-    if getattr(args, 'val_ratio', None) is not None and not user_cfg_has(user_cfg, ['splits', 'val_ratio']):
+    if getattr(args, 'val_ratio', None) is not None and (force and cli_provided('--val_ratio') or not user_cfg_has(user_cfg, ['splits', 'val_ratio'])):
         config['splits']['val_ratio'] = args.val_ratio
-    if getattr(args, 'test_ratio', None) is not None and not user_cfg_has(user_cfg, ['splits', 'test_ratio']):
+    if getattr(args, 'test_ratio', None) is not None and (force and cli_provided('--test_ratio') or not user_cfg_has(user_cfg, ['splits', 'test_ratio'])):
         config['splits']['test_ratio'] = args.test_ratio
-    if getattr(args, 'k_folds', None) and not user_cfg_has(user_cfg, ['splits', 'k_folds']):
+    if getattr(args, 'k_folds', None) and (force and cli_provided('--k_folds') or not user_cfg_has(user_cfg, ['splits', 'k_folds'])):
         config['splits']['k_folds'] = args.k_folds
-    if getattr(args, 'random_seed', None) and not user_cfg_has(user_cfg, ['splits', 'random_seed']):
+    if getattr(args, 'random_seed', None) and (force and cli_provided('--random_seed') or not user_cfg_has(user_cfg, ['splits', 'random_seed'])):
         config['splits']['random_seed'] = args.random_seed
-    if getattr(args, 'target_size', None) and not user_cfg_has(user_cfg, ['preprocessing', 'target_size']):
+    if getattr(args, 'target_size', None) and (force and cli_provided('--target_size') or not user_cfg_has(user_cfg, ['preprocessing', 'target_size'])):
         config['preprocessing']['target_size'] = args.target_size
-    if getattr(args, 'skip_preprocess', False) and not user_cfg_has(user_cfg, ['advanced', 'skip_preprocess']):
+    if getattr(args, 'skip_preprocess', False) and (force and cli_provided('--skip_preprocess') or not user_cfg_has(user_cfg, ['advanced', 'skip_preprocess'])):
         config['advanced']['skip_preprocess'] = True
-    if getattr(args, 'crop_to_prostate', False) and not user_cfg_has(user_cfg, ['preprocessing', 'crop_to_prostate']):
+    if getattr(args, 'crop_to_prostate', False) and (force and cli_provided('--crop_to_prostate') or not user_cfg_has(user_cfg, ['preprocessing', 'crop_to_prostate'])):
         config['preprocessing']['crop_to_prostate'] = True
-    if getattr(args, 'crop_margin', None) is not None and not user_cfg_has(user_cfg, ['preprocessing', 'crop_margin']):
+    if getattr(args, 'crop_margin', None) is not None and (force and cli_provided('--crop_margin') or not user_cfg_has(user_cfg, ['preprocessing', 'crop_margin'])):
         config['preprocessing']['crop_margin'] = args.crop_margin
 
     return config
@@ -535,6 +549,7 @@ def main():
                        help='Supprimer les slices axiales sans prostate avant le resampling')
     parser.add_argument('--crop_margin', type=int,
                        help='Nombre de slices de marge autour de la prostate lors du cropping (défaut: 2, remplace la config)')
+    parser.add_argument('--force-cli', action='store_true', help='Forcer les arguments CLI à remplacer les valeurs du YAML (par défaut: YAML > CLI)')
 
     args = parser.parse_args()
 
