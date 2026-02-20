@@ -146,6 +146,52 @@ def load_metadata(patient_dir):
     return None
 
 
+def save_prediction_as_nifti(prediction, metadata, nifti_path):
+    """Sauvegarde `prediction` au format NIfTI en utilisant `metadata['original_affine']`.
+
+    - Accepte un `prediction` en `torch.Tensor` ou `numpy.ndarray`.
+    - Retourne True si la sauvegarde a eu lieu, False sinon (manque nibabel ou metadata).
+    """
+    global inference_logger
+    if not HAS_NIBABEL:
+        if inference_logger:
+            inference_logger.warning("nibabel non installé — impossible de sauvegarder en .nii.gz")
+        return False
+
+    if metadata is None or 'original_affine' not in metadata:
+        if inference_logger:
+            inference_logger.warning('Métadonnées originales absentes — impossible de sauvegarder NIfTI à la taille originale')
+        return False
+
+    # Convertir en numpy si nécessaire
+    try:
+        arr = prediction.numpy() if hasattr(prediction, 'numpy') else np.asarray(prediction)
+    except Exception:
+        try:
+            arr = np.asarray(prediction)
+        except Exception:
+            if inference_logger:
+                inference_logger.error('Impossible de convertir la prédiction en tableau numpy pour l’écriture NIfTI')
+            return False
+
+    # S'assurer d'un type entier pour les labels
+    try:
+        arr = arr.astype(np.uint8)
+    except Exception:
+        arr = arr.astype(np.int32)
+
+    affine = metadata.get('original_affine')
+    try:
+        nifti_img = nib.Nifti1Image(arr, affine)
+        nib.save(nifti_img, nifti_path)
+        if inference_logger:
+            inference_logger.info(f"Prédiction NIfTI sauvegardée: {nifti_path}")
+        return True
+    except Exception as e:
+        if inference_logger:
+            inference_logger.error(f"Échec sauvegarde NIfTI: {e}")
+        return False
+
 def resize_prediction_to_original(prediction, original_shape):
     """Redimensionne la prédiction à la taille originale du volume.
     
@@ -179,7 +225,7 @@ def resolve_inference_params(args, config):
     passed (in that case CLI wins).
 
     Returns a dict with keys: verbosity, device, batch_size, save_predictions,
-    save_probabilities, threshold.
+    save_probabilities, save_nifti, threshold.
     """
     import sys
     inf_cfg = (config or {}).get('inference_parameters', {}) if isinstance(config, dict) else {}
@@ -216,14 +262,23 @@ def resolve_inference_params(args, config):
     elif 'save_predictions' in inf_cfg:
         save_predictions = bool(inf_cfg['save_predictions'])
     else:
-        save_predictions = True if args.save_predictions or True else True
+        save_predictions = True if getattr(args, 'save_predictions', None) or True else True
 
     if force and cli_provided('--save_probabilities'):
         save_probabilities = True
     elif 'save_probabilities' in inf_cfg:
         save_probabilities = bool(inf_cfg['save_probabilities'])
     else:
-        save_probabilities = bool(args.save_probabilities)
+        save_probabilities = bool(getattr(args, 'save_probabilities', False))
+
+    # save NIfTI (default: True)
+    if force and cli_provided('--save_nifti'):
+        save_nifti = True
+    elif 'save_nifti' in inf_cfg:
+        save_nifti = bool(inf_cfg['save_nifti'])
+    else:
+        # default to True to provide NIfTI outputs alongside .pt
+        save_nifti = True if getattr(args, 'save_nifti', None) or True else True
 
     # threshold
     if force and cli_provided('--threshold'):
@@ -237,6 +292,7 @@ def resolve_inference_params(args, config):
         'batch_size': batch_size,
         'save_predictions': save_predictions,
         'save_probabilities': save_probabilities,
+        'save_nifti': save_nifti,
         'threshold': threshold,
     }
 
@@ -253,6 +309,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=0.5, help="Seuil de confiance (défaut: 0.5)")
     parser.add_argument("--save_predictions", action="store_true", help="Sauvegarder les prédictions", default=None)
     parser.add_argument("--save_probabilities", action="store_true", help="Sauvegarder les probabilités", default=None)
+    parser.add_argument("--save_nifti", action="store_true", help="Sauvegarder la prédiction en NIfTI (.nii.gz)", default=None)
     parser.add_argument('--force-cli', action='store_true', help='Forcer les arguments CLI à remplacer les valeurs du YAML (par défaut: YAML > CLI)')
 
     args = parser.parse_args()
@@ -331,15 +388,15 @@ def main():
     if resolved.get('save_probabilities', False):
         inference_logger.info('save_probabilities requested but not implemented in this script')
 
-
-    # Sauvegarder également en NIfTI si nibabel est disponible et les métadonnées existent
-    if HAS_NIBABEL and metadata is not None and 'original_affine' in metadata:
+    # Sauvegarder la prédiction au format NIfTI (.nii.gz) **après** le retour à la
+    # taille originale (nécessite `metadata['original_affine']`). Contrôlé par
+    # `resolved['save_nifti']` et nécessite nibabel.
+    nifti_requested = resolved.get('save_nifti', True)
+    if nifti_requested:
         nifti_path = os.path.join(args.output_dir, f"prediction_{os.path.basename(args.input_dir)}.nii.gz")
-        affine = metadata['original_affine']
-        nifti_img = nib.Nifti1Image(prediction_original.numpy().astype(np.uint8), affine)
-        nib.save(nifti_img, nifti_path)
-        inference_logger.info(f"Prédiction NIfTI sauvegardée: {nifti_path}")
-
+        saved = save_prediction_as_nifti(prediction_original, metadata, nifti_path)
+        if not saved:
+            inference_logger.debug('NIfTI non sauvegardé (métadonnées manquantes ou nibabel absent)')
     # Statistiques
     unique, counts = np.unique(prediction_original.numpy(), return_counts=True)
     inference_logger.info("Statistiques de prédiction:")

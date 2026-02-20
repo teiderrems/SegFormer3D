@@ -118,6 +118,22 @@ def load_pipeline_config(config_path, return_user_config=False):
                 return result
 
             config = merge_configs(default_config, user_config)
+
+            # Normalisation: si l'utilisateur **n'a pas** défini explicitement
+            # `paths.test_data_dir` dans le YAML, on l'aligne sur
+            # `paths.preprocessed_data_dir` pour éviter des chemins divergents
+            # entre `preprocessed_data_dir` (souvent personnalisé) et la valeur
+            # par défaut statique de `test_data_dir`.
+            # Ne pas écraser si l'utilisateur a explicitement défini `test_data_dir`.
+            try:
+                user_paths = (user_config or {}).get('paths', {}) if isinstance(user_config, dict) else {}
+                cfg_paths = config.setdefault('paths', {})
+                if 'test_data_dir' not in user_paths:
+                    cfg_paths['test_data_dir'] = cfg_paths.get('preprocessed_data_dir', cfg_paths.get('test_data_dir'))
+            except Exception:
+                # En cas d'erreur inattendue, ne pas empêcher le chargement de la config
+                pipeline_logger.debug('Impossible de normaliser test_data_dir à partir de preprocessed_data_dir')
+
             pipeline_logger.info(f"Configuration chargée depuis: {config_path}")
             return (config, user_config) if return_user_config else config
 
@@ -458,15 +474,57 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Traiter chaque patient dans le répertoire de test
+    # Traiter les patients de test — si un `test.csv` est présent, l'utiliser
     test_data_path = Path(test_data_dir)
     if not test_data_path.exists():
         pipeline_logger.error(f"Répertoire de test non trouvé: {test_data_path}")
         return False
 
-    patients = [p for p in test_data_path.iterdir() if p.is_dir()]
+    # Si test.csv existe, respecter la liste de cas indiquée (supporte colonnes `data_path` et/ou `case_name`)
+    csv_path = test_data_path / 'test.csv'
+    patients = []
+    if csv_path.exists():
+        import csv
+        try:
+            with open(csv_path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Priorité à data_path si fourni
+                    dp = row.get('data_path', '').strip() if row.get('data_path') is not None else ''
+                    case = row.get('case_name', '').strip() if row.get('case_name') is not None else ''
+
+                    candidate = None
+                    if dp:
+                        p = Path(dp)
+                        if not p.is_absolute():
+                            # essayer relatif au repo root, puis relatif à test_data_path
+                            repo_root = Path(__file__).resolve().parents[1]
+                            p_repo = (repo_root / dp).resolve()
+                            p_local = (test_data_path / dp).resolve()
+                            if p_repo.exists():
+                                candidate = p_repo
+                            elif p_local.exists():
+                                candidate = p_local
+                            else:
+                                candidate = p.resolve()
+                        else:
+                            candidate = p.resolve()
+                    elif case:
+                        candidate = (test_data_path / case).resolve()
+
+                    if candidate and candidate.exists() and candidate.is_dir():
+                        patients.append(candidate)
+                    else:
+                        pipeline_logger.warning(f"Patient listé dans test.csv introuvable ou non-dossier: {row}")
+        except Exception as e:
+            pipeline_logger.error(f"Impossible de lire {csv_path}: {e}")
+            return False
+    else:
+        # Ancien comportement: lister tous les dossiers présents dans le répertoire prétraité
+        patients = [p for p in test_data_path.iterdir() if p.is_dir()]
+
     if not patients:
-        pipeline_logger.error(f"Aucun patient trouvé dans {test_data_path}")
+        pipeline_logger.error(f"Aucun patient trouvé pour inférence dans {test_data_path}")
         return False
 
     success_count = 0
@@ -598,7 +656,24 @@ def main():
         log_section(pipeline_logger, f"ARCHITECTURE: {arch}")
 
         # 1. Prétraitement
-        if not config['advanced']['skip_preprocess']:
+        # --- Comportement ajouté : si un `test.csv` existe déjà dans le répertoire
+        # prétraité, on considère le prétraitement comme déjà fait et on le saute
+        # automatiquement. L'utilisateur peut toujours forcer le saut via
+        # `--skip_preprocess` ou la config YAML `advanced.skip_preprocess`.
+        preprocessed_dir = Path(config['paths']['preprocessed_data_dir'])
+        test_csv_path = preprocessed_dir / 'test.csv'
+
+        # Déterminer si l'on doit exécuter le prétraitement
+        if config.get('advanced', {}).get('skip_preprocess', False) or getattr(args, 'skip_preprocess', False):
+            pipeline_logger.info("--skip_preprocess demandé: saut du prétraitement")
+            do_preprocess = False
+        elif test_csv_path.exists():
+            pipeline_logger.info(f"Fichier de split détecté ({test_csv_path}) — saut automatique du prétraitement")
+            do_preprocess = False
+        else:
+            do_preprocess = True
+
+        if do_preprocess:
             if not preprocess_data(arch, config['paths']['raw_data_dir'], config['paths']['preprocessed_data_dir'],
                                  config['splits']['split_type'], config['splits']['train_ratio'],
                                  config['splits']['val_ratio'], config['splits']['test_ratio'],
@@ -711,6 +786,11 @@ def main():
         checkpoint_dir_arch = Path(config['paths']['checkpoint_dir']) / arch
         repo_ckpt_dir = Path(config['paths']['checkpoint_dir'])
 
+        # Répertoire des données de test (peut être différent des données prétraitées pour train/val)
+        # Toujours initialiser `test_data_dir` afin d'éviter UnboundLocalError lorsque
+        # des checkpoints sont fournis explicitement via CLI.
+        test_data_dir = Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir']))
+
         # Déterminer la liste de checkpoints à exécuter (argument CLI > défaut)
         if args.checkpoints:
             requested_ckpts = args.checkpoints
@@ -718,30 +798,33 @@ def main():
             # Par défaut on essaie 'best_model' puis 'final_model'
             requested_ckpts = ['best_model', 'final_model']
 
-            # Répertoire des données de test (peut être différent des données prétraitées pour train/val)
-            test_data_dir = Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir']))
         base_results_dir = Path(config['paths']['results_dir']) / arch
 
         any_success_for_arch = False
         for ckpt_name in requested_ckpts:
             # Rechercher des fichiers correspondant au nom du checkpoint (ex: best_model*) dans plusieurs emplacements
-            candidates = []
             pattern = f"{ckpt_name}*"
-            # Chercher d'abord dans le répertoire principal
-            candidates += list(repo_ckpt_dir.glob(pattern))
-            # Puis dans le sous-répertoire de l'architecture si existant
-            if checkpoint_dir_arch.exists():
-                candidates += list(checkpoint_dir_arch.glob(pattern))
 
-            # Fallback: prendre tout .pth/.pt si aucun n'a été trouvé pour ce nom
+            # Collecte brute (peut contenir des fichiers .txt d'information)
+            raw_candidates = list(repo_ckpt_dir.glob(pattern))
+            if checkpoint_dir_arch.exists():
+                raw_candidates += list(checkpoint_dir_arch.glob(pattern))
+
+            # Ne conserver que des fichiers de modèles reconnus (éviter .txt / .json)
+            allowed_exts = {'.pth', '.pt', '.ckpt', '.tar'}
+            candidates = [p for p in raw_candidates if p.suffix.lower() in allowed_exts]
+
+            # Si aucun fichier valide pour le pattern, fallback vers .pth/.pt présents dans les répertoires
             if not candidates:
-                candidates += list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
+                candidates = list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
+                if checkpoint_dir_arch.exists():
+                    candidates += list(checkpoint_dir_arch.glob("*.pth")) + list(checkpoint_dir_arch.glob("*.pt"))
 
             if not candidates:
                 pipeline_logger.warning(f"Aucun checkpoint pour '{ckpt_name}'. Ignoré.")
                 continue
 
-            # Choisir le plus récent parmi les candidats
+            # Choisir le plus récent parmi les candidats valides
             checkpoint_path = max(candidates, key=lambda p: p.stat().st_mtime)
             pipeline_logger.info(f"Checkpoint '{ckpt_name}': {checkpoint_path}")
 

@@ -190,6 +190,8 @@ python pipeline.py --crop_to_prostate --crop_margin 3
 python pipeline.py --skip_preprocess
 ```
 
+> Astuce : la pipeline détecte automatiquement `test.csv` dans `paths.preprocessed_data_dir` et sautera le prétraitement si ce fichier existe — pratique pour relancer uniquement l'inférence/visualisation sur un dataset déjà préparé.
+
 ### Inférence et visualisation
 
 ```bash
@@ -201,7 +203,33 @@ python pipeline.py --skip_preprocess --checkpoints best_model --visualize
 
 # Visualisations sans volumétrique 3D (plus rapide)
 python pipeline.py --skip_preprocess --checkpoints best_model --visualize --skip_volume
+
+# Exécuter seulement l'inférence/visualisation (sauter l'entraînement)
+python pipeline.py --skip_training --checkpoints best_model --visualize
 ```
+
+### Priorité YAML vs CLI et option `--force-cli`
+
+- Par défaut, les valeurs définies explicitement dans les fichiers YAML prennent **priorité** sur les arguments en ligne de commande (cela garantit des runs reproductibles et centralisés).  
+- Si vous avez besoin d'overrider une valeur du YAML pour un run ponctuel (ou en CI), passez l'option CLI **et** ajoutez `--force-cli`. Exemple :
+
+```bash
+# YAML définit device=cuda, mais on force CLI -> device=cpu
+python inference_simple.py --config configs/config_segformer3d.yaml --device cpu --force-cli
+
+# YAML définit test dataset, mais on force CLI -> use the CLI dataset
+python scripts/run_visualizations_all.py --test_data_dir /path/to/other --force-cli
+```
+
+> Note : `--force-cli` est disponible sur `pipeline.py`, `inference_simple.py`, `visualize_results.py` et les scripts batch (`scripts/*`).
+
+### Comportements pratiques récents
+
+- Prétraitement automatique : la pipeline **saute automatiquement** le prétraitement si un fichier `test.csv` est présent dans `paths.preprocessed_data_dir` (utile lorsqu'on exécute l'inférence sur un jeu déjà prétraité).  
+- Sélection de checkpoint : la pipeline préfère un fichier binaire de checkpoint (`.pth`, `.pt`, `.ckpt`, `.tar`) — les fichiers d'information textuels (`best_model_info.txt`) sont ignorés pour l'inférence.  
+- Nouvelle clé YAML `inference_parameters` (ex. `device`, `batch_size`, `save_predictions`, `threshold`, `verbosity`) et `visualization` (ex. `volume_vis`, `compute_errors`, `output_dir`) — configurez l'inférence/visualisation entièrement depuis le YAML si souhaité.
+
+Pour des exemples d'exécution sur cluster (SLURM / OAR) et un script d'exemple, consultez `README_PIPELINE.md` ou utilisez `scripts/submit_oar_example.sh`.
 
 ### Référence complète des arguments `pipeline.py`
 
@@ -251,6 +279,7 @@ python pipeline.py --skip_preprocess --checkpoints best_model --visualize --skip
 | `--finetune_checkpoint` | `str` | `None` | Fine-tuning (reset optimiseur, époque 0) |
 | `--resume_checkpoint` | `str` | `None` | Reprise exacte (restaure tout) |
 | `--disable_augmentations` | flag | `false` | Désactiver les augmentations |
+| `--skip_training` | flag | `false` | **Sauter l'entraînement** — n'exécute que l'inférence et les visualisations (utile pour évaluer des checkpoints existants) |
 
 #### Inférence et visualisation
 
@@ -259,8 +288,7 @@ python pipeline.py --skip_preprocess --checkpoints best_model --visualize --skip
 | `--checkpoints` | `str` (liste) | `best_model final_model` | Checkpoints à inférer |
 | `--visualize` | flag | `false` | Générer les visualisations après inférence |
 | `--skip_volume` | flag | `false` | Ignorer visualisations 3D |
-| `--vis_timeout` | `int` | `600` | Timeout par patient (secondes) |
-
+| `--vis_timeout` | `int` | `600` | Timeout par patient (secondes) || `--save_nifti` | flag | `false` | Sauvegarder la prédiction au format `prediction_*.nii.gz` (nécessite `metadata['original_affine']` et `nibabel`) |
 ### Utilisation manuelle par architecture
 
 

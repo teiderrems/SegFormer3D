@@ -30,6 +30,18 @@ def test_user_config_overrides_test_data_dir(tmp_path):
     assert cfg['paths']['test_data_dir'] == './data/my_test_set'
 
 
+def test_test_data_dir_defaults_to_preprocessed_dir_when_missing(tmp_path):
+    """Si le YAML définit `preprocessed_data_dir` mais **pas** `test_data_dir`,
+    `test_data_dir` doit par défaut pointer vers `preprocessed_data_dir`."""
+    tmp_yaml = tmp_path / "tmp_pipeline.yaml"
+    user_cfg = {'paths': {'preprocessed_data_dir': './data/prostate_preprocessed/preprocessed_data_128_128_128'}}
+    tmp_yaml.write_text(yaml.safe_dump(user_cfg))
+
+    cfg = pipeline.load_pipeline_config(str(tmp_yaml))
+    assert cfg['paths']['preprocessed_data_dir'] == './data/prostate_preprocessed/preprocessed_data_128_128_128'
+    assert cfg['paths']['test_data_dir'] == './data/prostate_preprocessed/preprocessed_data_128_128_128'
+
+
 def test_yaml_priority_prevents_cli_override_for_paths(tmp_path):
     # YAML définit test_data_dir -> CLI ne doit pas l'écraser
     tmp_yaml = tmp_path / "tmp_pipeline.yaml"

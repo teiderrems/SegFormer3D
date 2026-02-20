@@ -47,8 +47,7 @@ inference_parameters:
   device: cpu                     # Device par défaut pour l'inférence (cpu|cuda)
   batch_size: 1                   # Batch size pour l'inférence
   save_predictions: true          # Sauvegarder les fichiers prediction_*.pt
-  save_probabilities: false       # Sauvegarder les probabilités (placeholder)
-  threshold: 0.5                  # Seuil utilisé par certains workflows
+  save_probabilities: false       # Sauvegarder les probabilités (placeholder)  save_nifti: true                  # Sauvegarder également la prédiction en .nii.gz après resize vers la taille originale  threshold: 0.5                  # Seuil utilisé par certains workflows
   verbosity: normal               # Verbosity par défaut pour l'inférence
 
 # Paramètres de visualisation (utilisés par `visualize_results.py`)

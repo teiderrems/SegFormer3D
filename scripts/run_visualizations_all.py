@@ -169,7 +169,7 @@ def process_patient(patient, verbosity, skip_volume, timeout, PYTHON, ROOT, CONF
     outdir.mkdir(parents=True, exist_ok=True)
     if not input_dir.exists():
         # fallback: try previous hardcoded path to not break older setups
-        input_dir = ROOT / 'data' / 'prostate_preprocessed_128_128_128' / patient
+        input_dir = ROOT / 'data'/ 'prostate_preprocessed' / 'preprocessed_data_128_128_128' / patient
         if not input_dir.exists():
             print(f"  Input data not found for {patient} (checked {test_csv.parent} and prostate_preprocessed_128_128_128). Skipping.")
             return None
