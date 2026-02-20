@@ -48,3 +48,5 @@ def test_pipeline_run_inference_uses_test_csv(monkeypatch, tmp_path):
     # Only patient_b (listed in CSV) should have been processed
     assert any('patient_b' in c for c in calls)
     assert not any('patient_a' in c for c in calls)
+    # Default YAML enables save_nifti -> pipeline should have passed the flag to inference_simple
+    assert any('--save_nifti' in c for c in calls), 'pipeline should request NIfTI save by default'

@@ -468,6 +468,7 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
     device = inference_params.get('device', 'cuda')
     save_predictions = inference_params.get('save_predictions', True)
     save_probabilities = inference_params.get('save_probabilities', False)
+    save_nifti = inference_params.get('save_nifti', True)
     threshold = inference_params.get('threshold', 0.5)
 
     # Créer le répertoire de sortie
@@ -546,6 +547,8 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
             command += " --save_predictions"
         if save_probabilities:
             command += " --save_probabilities"
+        if save_nifti:
+            command += " --save_nifti"
         command += f" --threshold {threshold}"
         if run_command(command, cwd=str(Path(__file__).parent), description=f"Inférence pour {architecture} - {patient_dir.name}"):
             success_count += 1

@@ -51,3 +51,5 @@ def test_force_cli_propagated_to_child(tmp_path, monkeypatch):
 
     # Assert the child command included --force-cli
     assert '--force-cli' in captured['cmd']
+    # YAML default enables NIfTI output -> child command should include --save_nifti
+    assert '--save_nifti' in captured['cmd']

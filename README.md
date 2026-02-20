@@ -288,7 +288,7 @@ Pour des exemples d'exécution sur cluster (SLURM / OAR) et un script d'exemple,
 | `--checkpoints` | `str` (liste) | `best_model final_model` | Checkpoints à inférer |
 | `--visualize` | flag | `false` | Générer les visualisations après inférence |
 | `--skip_volume` | flag | `false` | Ignorer visualisations 3D |
-| `--vis_timeout` | `int` | `600` | Timeout par patient (secondes) || `--save_nifti` | flag | `false` | Sauvegarder la prédiction au format `prediction_*.nii.gz` (nécessite `metadata['original_affine']` et `nibabel`) |
+| `--vis_timeout` | `int` | `600` | Timeout par patient (secondes) || `--save_nifti` | flag | `true` (via YAML) | Sauvegarder la prédiction au format `prediction_*.nii.gz` (nécessite `metadata['original_affine']` et `nibabel`) |
 ### Utilisation manuelle par architecture
 
 

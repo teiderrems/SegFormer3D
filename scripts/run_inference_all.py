@@ -69,6 +69,10 @@ def process_inference(row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RE
         cmd.append('--save_predictions')
     if save_probabilities:
         cmd.append('--save_probabilities')
+    # Support save_nifti from YAML (enabled by default in configs)
+    save_nifti = inference_params.get('save_nifti', True)
+    if save_nifti:
+        cmd.append('--save_nifti')
     if force_cli:
         cmd.append('--force-cli')
 
