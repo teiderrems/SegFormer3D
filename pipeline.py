@@ -517,6 +517,8 @@ def main():
                        help="Répertoire des résultats d'inférence (remplace la config)")
     parser.add_argument("--skip_preprocess", action="store_true",
                        help="Sauter l'étape de prétraitement")
+    parser.add_argument("--skip_training", action="store_true",
+                       help="Sauter l'étape d'entraînement (exécute seulement inférence + visualisations)")
     parser.add_argument("--split_type", choices=["fixed", "kfold"],
                        help="Type de split pour les données (remplace la config)")
     parser.add_argument("--train_ratio", type=float,
@@ -619,85 +621,90 @@ def main():
             pipeline_logger.error(f"Configuration non trouvée: {config_path}")
             continue
 
-        # Load architecture config (and inject pipeline-level preferences)
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                arch_cfg = yaml.safe_load(f) or {}
-
-            # Assurer l'existence des champs attendus
-            arch_cfg.setdefault('dataset_parameters', {})
-            train_args = arch_cfg['dataset_parameters'].setdefault('train_dataset_args', {})
-            val_args = arch_cfg['dataset_parameters'].setdefault('val_dataset_args', {})
-            test_args = arch_cfg['dataset_parameters'].setdefault('test_dataset_args', {})
-
-            # Injecter le flag d'augmentations (train: par défaut selon pipeline, val/test: désactivées)
-            train_args['augmentations'] = bool(config.get('augmentations', {}).get('enabled', True))
-            val_args['augmentations'] = False
-            test_args['augmentations'] = False
-
-            # Injecter les chemins root et split_file depuis la config pipeline
-            preprocessed_dir = str(Path(config['paths']['preprocessed_data_dir']).resolve())
-            train_args.setdefault('root', preprocessed_dir)
-            train_args.setdefault('split_file', str(Path(preprocessed_dir) / 'train.csv'))
-            val_args.setdefault('root', preprocessed_dir)
-            val_args.setdefault('split_file', str(Path(preprocessed_dir) / 'validation.csv'))
-            test_data_dir = str(Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir'])).resolve())
-            test_args.setdefault('root', test_data_dir)
-            test_args.setdefault('split_file', str(Path(test_data_dir) / 'test.csv'))
-
-            # Injecter la taille cible (target_size) depuis la config pipeline
-            ts = config['preprocessing']['target_size']
-            train_args.setdefault('target_size', ts)
-            val_args.setdefault('target_size', ts)
-            test_args.setdefault('target_size', ts)
-
-            # Injecter dataset_type
-            pipeline_ds = config.get('dataset_parameters', {})
-            if 'dataset_type' in pipeline_ds:
-                arch_cfg['dataset_parameters'].setdefault('dataset_type', pipeline_ds['dataset_type'])
-
-            # Injecter debug_augment si défini dans pipeline config
-            for split_key, split_args in [('train_dataset_args', train_args), ('val_dataset_args', val_args), ('test_dataset_args', test_args)]:
-                pipeline_split = pipeline_ds.get(split_key, {})
-                if 'debug_augment' in pipeline_split:
-                    split_args.setdefault('debug_augment', pipeline_split['debug_augment'])
-
-            # Injecter les paramètres du dataloader depuis la config pipeline
-            pipeline_dl = config.get('dataloader', {})
-            if pipeline_dl:
-                arch_cfg.setdefault('dataloader', {})
-                for key in ['batch_size', 'shuffle', 'num_workers', 'drop_last']:
-                    if key in pipeline_dl:
-                        arch_cfg['dataloader'].setdefault(key, pipeline_dl[key])
-
-            # Injecter batch_size et d'autres paramètres training si définis dans pipeline
-            pipeline_training = config.get('training', {})
-            if pipeline_training:
-                arch_cfg.setdefault('training_parameters', {})
-                if 'batch_size' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('batch_size', pipeline_training['batch_size'])
-                    arch_cfg.setdefault('dataloader', {}).setdefault('batch_size', pipeline_training['batch_size'])
-                if 'num_epochs' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('num_epochs', pipeline_training['num_epochs'])
-                if 'learning_rate' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('learning_rate', pipeline_training['learning_rate'])
-                if 'device' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('device', pipeline_training['device'])
-
-            # Écrire dans un fichier temporaire pour éviter d'écraser la config d'origine
-            import tempfile
-            tmp_cfg_file = Path(tempfile.gettempdir()) / f"config_{arch.lower()}_pipeline_tmp.yaml"
-            with open(tmp_cfg_file, 'w', encoding='utf-8') as f:
-                yaml.safe_dump(arch_cfg, f, default_flow_style=False, allow_unicode=True)
-
-            train_cfg_to_use = str(tmp_cfg_file)
-        except Exception as e:
-            pipeline_logger.error(f"Erreur injection augmentations: {e}")
+        # If user requested to skip training, bypass the training step and proceed to inference
+        if args.skip_training:
+            pipeline_logger.info(f"--skip_training activé: sauter l'entraînement pour {arch} et passer à l'inférence")
             train_cfg_to_use = str(config_path)
+        else:
+            # Load architecture config (and inject pipeline-level preferences)
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    arch_cfg = yaml.safe_load(f) or {}
 
-        if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint, args.resume_checkpoint):
-            pipeline_logger.error(f"Échec de l'entraînement pour {arch}")
-            continue
+                # Assurer l'existence des champs attendus
+                arch_cfg.setdefault('dataset_parameters', {})
+                train_args = arch_cfg['dataset_parameters'].setdefault('train_dataset_args', {})
+                val_args = arch_cfg['dataset_parameters'].setdefault('val_dataset_args', {})
+                test_args = arch_cfg['dataset_parameters'].setdefault('test_dataset_args', {})
+
+                # Injecter le flag d'augmentations (train: par défaut selon pipeline, val/test: désactivées)
+                train_args['augmentations'] = bool(config.get('augmentations', {}).get('enabled', True))
+                val_args['augmentations'] = False
+                test_args['augmentations'] = False
+
+                # Injecter les chemins root et split_file depuis la config pipeline
+                preprocessed_dir = str(Path(config['paths']['preprocessed_data_dir']).resolve())
+                train_args.setdefault('root', preprocessed_dir)
+                train_args.setdefault('split_file', str(Path(preprocessed_dir) / 'train.csv'))
+                val_args.setdefault('root', preprocessed_dir)
+                val_args.setdefault('split_file', str(Path(preprocessed_dir) / 'validation.csv'))
+                test_data_dir = str(Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir'])).resolve())
+                test_args.setdefault('root', test_data_dir)
+                test_args.setdefault('split_file', str(Path(test_data_dir) / 'test.csv'))
+
+                # Injecter la taille cible (target_size) depuis la config pipeline
+                ts = config['preprocessing']['target_size']
+                train_args.setdefault('target_size', ts)
+                val_args.setdefault('target_size', ts)
+                test_args.setdefault('target_size', ts)
+
+                # Injecter dataset_type
+                pipeline_ds = config.get('dataset_parameters', {})
+                if 'dataset_type' in pipeline_ds:
+                    arch_cfg['dataset_parameters'].setdefault('dataset_type', pipeline_ds['dataset_type'])
+
+                # Injecter debug_augment si défini dans pipeline config
+                for split_key, split_args in [('train_dataset_args', train_args), ('val_dataset_args', val_args), ('test_dataset_args', test_args)]:
+                    pipeline_split = pipeline_ds.get(split_key, {})
+                    if 'debug_augment' in pipeline_split:
+                        split_args.setdefault('debug_augment', pipeline_split['debug_augment'])
+
+                # Injecter les paramètres du dataloader depuis la config pipeline
+                pipeline_dl = config.get('dataloader', {})
+                if pipeline_dl:
+                    arch_cfg.setdefault('dataloader', {})
+                    for key in ['batch_size', 'shuffle', 'num_workers', 'drop_last']:
+                        if key in pipeline_dl:
+                            arch_cfg['dataloader'].setdefault(key, pipeline_dl[key])
+
+                # Injecter batch_size et d'autres paramètres training si définis dans pipeline
+                pipeline_training = config.get('training', {})
+                if pipeline_training:
+                    arch_cfg.setdefault('training_parameters', {})
+                    if 'batch_size' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('batch_size', pipeline_training['batch_size'])
+                        arch_cfg.setdefault('dataloader', {}).setdefault('batch_size', pipeline_training['batch_size'])
+                    if 'num_epochs' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('num_epochs', pipeline_training['num_epochs'])
+                    if 'learning_rate' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('learning_rate', pipeline_training['learning_rate'])
+                    if 'device' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('device', pipeline_training['device'])
+
+                # Écrire dans un fichier temporaire pour éviter d'écraser la config d'origine
+                import tempfile
+                tmp_cfg_file = Path(tempfile.gettempdir()) / f"config_{arch.lower()}_pipeline_tmp.yaml"
+                with open(tmp_cfg_file, 'w', encoding='utf-8') as f:
+                    yaml.safe_dump(arch_cfg, f, default_flow_style=False, allow_unicode=True)
+
+                train_cfg_to_use = str(tmp_cfg_file)
+            except Exception as e:
+                pipeline_logger.error(f"Erreur injection augmentations: {e}")
+                train_cfg_to_use = str(config_path)
+
+            if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint, args.resume_checkpoint):
+                pipeline_logger.error(f"Échec de l'entraînement pour {arch}")
+                continue
 
         # 3. Inférence
         # Chercher les checkpoints demandés et exécuter l'inférence pour chacun

@@ -257,6 +257,7 @@ Tous les arguments CLI de `pipeline.py`. Chaque argument surcharge la valeur cor
 | `--finetune_checkpoint` | `str` | `None` | Checkpoint pour le **fine-tuning** : charge les poids du modèle, remet l'optimiseur et le scheduler à zéro, repart de l'époque 0 |
 | `--resume_checkpoint` | `str` | `None` | Checkpoint pour la **reprise d'entraînement** : restaure modèle + optimiseur + scheduler + métriques + numéro d'époque |
 | `--disable_augmentations` | flag | `false` | Désactiver les augmentations de données pendant l'entraînement (surcharge `augmentations.enabled` dans la config) |
+| `--skip_training` | flag | `false` | Sauter l'étape d'entraînement — exécuter seulement l'inférence et les visualisations (utile pour évaluer/checkpoint-only runs) |
 
 > **Attention** : `--finetune_checkpoint` et `--resume_checkpoint` sont **mutuellement exclusifs**. Utilisez `--finetune_checkpoint` pour réentraîner un modèle depuis un autre jeu de données, et `--resume_checkpoint` pour continuer un entraînement interrompu.
 
