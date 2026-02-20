@@ -21,15 +21,16 @@ from train_scripts.logger import get_logger, log_pipeline_step, log_section
 pipeline_logger = get_logger("pipeline", level="INFO")
 
 
-def load_pipeline_config(config_path):
+def load_pipeline_config(config_path, return_user_config=False):
     """
     Charge la configuration de la pipeline depuis un fichier YAML.
 
     Args:
         config_path: Chemin vers le fichier de configuration YAML
+        return_user_config: si True, retourne aussi le dictionnaire chargé depuis le YAML
 
     Returns:
-        Dictionnaire de configuration avec valeurs par défaut
+        Dictionnaire de configuration avec valeurs par défaut (et optionnellement le user_config)
     """
     # Configuration par défaut
     default_config = {
@@ -98,10 +99,11 @@ def load_pipeline_config(config_path):
     }
 
     # Charge la configuration depuis le fichier si elle existe
+    user_config = {}
     if config_path and Path(config_path).exists():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                user_config = yaml.safe_load(f)
+                user_config = yaml.safe_load(f) or {}
 
             # Fusionne avec la configuration par défaut
             def merge_configs(default, user):
@@ -117,15 +119,73 @@ def load_pipeline_config(config_path):
 
             config = merge_configs(default_config, user_config)
             pipeline_logger.info(f"Configuration chargée depuis: {config_path}")
-            return config
+            return (config, user_config) if return_user_config else config
 
         except Exception as e:
             pipeline_logger.error(f"Erreur lors du chargement de {config_path}: {e}")
             pipeline_logger.warning("Utilisation de la configuration par défaut")
-            return default_config
+            return (default_config, {}) if return_user_config else default_config
     else:
         pipeline_logger.warning("Fichier de configuration non trouvé, utilisation des paramètres par défaut")
-        return default_config
+        return (default_config, {}) if return_user_config else default_config
+
+
+def apply_cli_overrides_with_yaml_priority(config, user_cfg, args):
+    """
+    Applique les arguments CLI au dictionnaire `config` **seulement si** la clé
+    correspondante n'est pas explicitement définie dans `user_cfg` (YAML).
+
+    - `config` est modifié in-place.
+    - `user_cfg` doit être le dict tel que lu depuis le YAML (vide si aucun YAML).
+    """
+    def user_cfg_has(user_cfg_dict, key_path):
+        cur = user_cfg_dict or {}
+        for k in key_path:
+            if not isinstance(cur, dict) or k not in cur:
+                return False
+            cur = cur[k]
+        return True
+
+    # Appliquer les arguments CLI **seulement si** la clé correspondante n'est pas définie dans le YAML
+    if getattr(args, 'disable_augmentations', False) and not user_cfg_has(user_cfg, ['augmentations', 'enabled']):
+        config['augmentations']['enabled'] = False
+
+    if getattr(args, 'architectures', None) and not user_cfg_has(user_cfg, ['architectures', 'enabled']):
+        config['architectures']['enabled'] = args.architectures
+    if getattr(args, 'raw_data_dir', None) and not user_cfg_has(user_cfg, ['paths', 'raw_data_dir']):
+        config['paths']['raw_data_dir'] = args.raw_data_dir
+    if getattr(args, 'preprocessed_data_dir', None) and not user_cfg_has(user_cfg, ['paths', 'preprocessed_data_dir']):
+        config['paths']['preprocessed_data_dir'] = args.preprocessed_data_dir
+    if getattr(args, 'test_data_dir', None) and not user_cfg_has(user_cfg, ['paths', 'test_data_dir']):
+        config['paths']['test_data_dir'] = args.test_data_dir
+    if getattr(args, 'config_dir', None) and not user_cfg_has(user_cfg, ['paths', 'config_dir']):
+        config['paths']['config_dir'] = args.config_dir
+    if getattr(args, 'checkpoint_dir', None) and not user_cfg_has(user_cfg, ['paths', 'checkpoint_dir']):
+        config['paths']['checkpoint_dir'] = args.checkpoint_dir
+    if getattr(args, 'results_dir', None) and not user_cfg_has(user_cfg, ['paths', 'results_dir']):
+        config['paths']['results_dir'] = args.results_dir
+    if getattr(args, 'split_type', None) and not user_cfg_has(user_cfg, ['splits', 'split_type']):
+        config['splits']['split_type'] = args.split_type
+    if getattr(args, 'train_ratio', None) is not None and not user_cfg_has(user_cfg, ['splits', 'train_ratio']):
+        config['splits']['train_ratio'] = args.train_ratio
+    if getattr(args, 'val_ratio', None) is not None and not user_cfg_has(user_cfg, ['splits', 'val_ratio']):
+        config['splits']['val_ratio'] = args.val_ratio
+    if getattr(args, 'test_ratio', None) is not None and not user_cfg_has(user_cfg, ['splits', 'test_ratio']):
+        config['splits']['test_ratio'] = args.test_ratio
+    if getattr(args, 'k_folds', None) and not user_cfg_has(user_cfg, ['splits', 'k_folds']):
+        config['splits']['k_folds'] = args.k_folds
+    if getattr(args, 'random_seed', None) and not user_cfg_has(user_cfg, ['splits', 'random_seed']):
+        config['splits']['random_seed'] = args.random_seed
+    if getattr(args, 'target_size', None) and not user_cfg_has(user_cfg, ['preprocessing', 'target_size']):
+        config['preprocessing']['target_size'] = args.target_size
+    if getattr(args, 'skip_preprocess', False) and not user_cfg_has(user_cfg, ['advanced', 'skip_preprocess']):
+        config['advanced']['skip_preprocess'] = True
+    if getattr(args, 'crop_to_prostate', False) and not user_cfg_has(user_cfg, ['preprocessing', 'crop_to_prostate']):
+        config['preprocessing']['crop_to_prostate'] = True
+    if getattr(args, 'crop_margin', None) is not None and not user_cfg_has(user_cfg, ['preprocessing', 'crop_margin']):
+        config['preprocessing']['crop_margin'] = args.crop_margin
+
+    return config
 
 def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42, architecture="SegFormer3D"):
     """
@@ -478,48 +538,15 @@ def main():
 
     args = parser.parse_args()
 
-    # Charger la configuration
-    config = load_pipeline_config(args.config)
+    # Charger la configuration (renvoie aussi user_config pour prioriser YAML)
+    cfg_ret = load_pipeline_config(args.config, return_user_config=True)
+    if isinstance(cfg_ret, tuple):
+        config, user_cfg = cfg_ret
+    else:
+        config, user_cfg = cfg_ret, {}
 
-    # Appliquer l'option CLI d'augmentation (si fournie)
-    if args.disable_augmentations:
-        config['augmentations']['enabled'] = False
-
-    # Remplacer les paramètres de configuration par les arguments en ligne de commande
-    if args.architectures:
-        config['architectures']['enabled'] = args.architectures
-    if args.raw_data_dir:
-        config['paths']['raw_data_dir'] = args.raw_data_dir
-    if args.preprocessed_data_dir:
-        config['paths']['preprocessed_data_dir'] = args.preprocessed_data_dir
-    if args.test_data_dir:
-        config['paths']['test_data_dir'] = args.test_data_dir
-    if args.config_dir:
-        config['paths']['config_dir'] = args.config_dir
-    if args.checkpoint_dir:
-        config['paths']['checkpoint_dir'] = args.checkpoint_dir
-    if args.results_dir:
-        config['paths']['results_dir'] = args.results_dir
-    if args.split_type:
-        config['splits']['split_type'] = args.split_type
-    if args.train_ratio is not None:
-        config['splits']['train_ratio'] = args.train_ratio
-    if args.val_ratio is not None:
-        config['splits']['val_ratio'] = args.val_ratio
-    if args.test_ratio is not None:
-        config['splits']['test_ratio'] = args.test_ratio
-    if args.k_folds:
-        config['splits']['k_folds'] = args.k_folds
-    if args.random_seed:
-        config['splits']['random_seed'] = args.random_seed
-    if args.target_size:
-        config['preprocessing']['target_size'] = args.target_size
-    if args.skip_preprocess:
-        config['advanced']['skip_preprocess'] = True
-    if args.crop_to_prostate:
-        config['preprocessing']['crop_to_prostate'] = True
-    if args.crop_margin is not None:
-        config['preprocessing']['crop_margin'] = args.crop_margin
+    # Appliquer les arguments CLI en respectant la priorité YAML > CLI
+    apply_cli_overrides_with_yaml_priority(config, user_cfg, args)
 
     # Créer les répertoires nécessaires
     Path(config['paths']['preprocessed_data_dir']).mkdir(parents=True, exist_ok=True)
