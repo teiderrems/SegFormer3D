@@ -44,56 +44,13 @@ CONFIG = (ROOT / 'configs' / 'config_segformer3d.yaml').resolve()
 DEFAULT_RESULTS_DIR = (ROOT / 'results').resolve()
 INFER_SCRIPT = (ROOT / 'inference_simple.py').resolve()
 
-# CLI options: verbosity, checkpoint override and tag for results subfolder
-parser = argparse.ArgumentParser(description='Batch inference runner')
-parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité: quiet|normal|debug')
-parser.add_argument('--checkpoint', type=str, default=None, help='Chemin vers un checkpoint à utiliser (remplace la détection automatique)')
-parser.add_argument('--tag', type=str, default=None, help='Suffixe pour le dossier de résultats (ex: best_model, final_model)')
-args = parser.parse_args()
-VERBOSITY = args.verbosity
 
-# If user passed a checkpoint, prefer it; else fall back to auto-detection and raise if none found
-if args.checkpoint:
-    CHECKPOINT = Path(args.checkpoint).resolve()
-    if not CHECKPOINT.exists():
-        # do not raise: allow network-mounted paths; warn and continue
-        print(f"Warning: checkpoint file not found locally at {CHECKPOINT}; the inference command will still be attempted.")
-if CHECKPOINT is None:
-    raise FileNotFoundError(f"No checkpoint found in expected locations: {candidates} (or via --checkpoint)")
+def process_inference(row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RESULTS_DIR, batch_size, device, save_predictions, save_probabilities, threshold, force_cli=False):
+    """Execute inference for a single CSV row and return case name if failed.
 
-# Determine results dir (optionally namespaced by tag)
-if args.tag:
-    RESULTS_DIR = DEFAULT_RESULTS_DIR / args.tag
-else:
-    RESULTS_DIR = DEFAULT_RESULTS_DIR
-
-import yaml
-
-# ... existing code ...
-
-# Charger la configuration pour récupérer les paramètres d'inférence
-with open(CONFIG, 'r') as f:
-    config = yaml.safe_load(f) or {}
-
-inference_params = config.get('inference_parameters', {})
-batch_size = inference_params.get('batch_size', 1)
-device = inference_params.get('device', 'cuda')
-save_predictions = inference_params.get('save_predictions', True)
-save_probabilities = inference_params.get('save_probabilities', False)
-threshold = inference_params.get('threshold', 0.5)
-
-if VERBOSITY != 'quiet':
-    print(f"Paramètres d'inférence: device={device}, batch_size={batch_size}, save_predictions={save_predictions}, save_probabilities={save_probabilities}, threshold={threshold}")
-
-if not CSV.exists():
-    raise FileNotFoundError(f"Test CSV not found: {CSV}")
-# Do not abort if checkpoint cannot be stat-checked (may be on mounted path); warn and continue
-if not CHECKPOINT.exists():
-    print(f"Warning: checkpoint file not found locally at {CHECKPOINT}; the inference command will still be attempted.")
-if not INFER_SCRIPT.exists():
-    raise FileNotFoundError(f"Inference script not found: {INFER_SCRIPT}")
-
-def process_inference(row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RESULTS_DIR, batch_size, device, save_predictions, save_probabilities, threshold):
+    `force_cli` controls whether the `--force-cli` flag is propagated to the
+    child `inference_simple.py` process.
+    """
     data_path = row['data_path']
     case = row['case_name']
     # Normalize data_path: if relative to project root, convert
@@ -112,6 +69,12 @@ def process_inference(row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RE
         cmd.append('--save_predictions')
     if save_probabilities:
         cmd.append('--save_probabilities')
+    # Support save_nifti from YAML (enabled by default in configs)
+    save_nifti = inference_params.get('save_nifti', True)
+    if save_nifti:
+        cmd.append('--save_nifti')
+    if force_cli:
+        cmd.append('--force-cli')
 
     t0 = time.time()
     try:
@@ -129,25 +92,79 @@ def process_inference(row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RE
         print(f"Inference failed for {case}: {e}")
         return case
 
-failed = []
-with open(CSV, 'r', newline='') as f:
-    reader = csv.DictReader(f)
-    rows = list(reader)
+def main():
+    # CLI options: verbosity, checkpoint override and tag for results subfolder
+    parser = argparse.ArgumentParser(description='Batch inference runner')
+    parser.add_argument('--verbosity', choices=['quiet','normal','debug'], default='normal', help='Niveau de verbosité: quiet|normal|debug')
+    parser.add_argument('--checkpoint', type=str, default=None, help='Chemin vers un checkpoint à utiliser (remplace la détection automatique)')
+    parser.add_argument('--tag', type=str, default=None, help='Suffixe pour le dossier de résultats (ex: best_model, final_model)')
+    parser.add_argument('--force-cli', action='store_true', help='Forcer les arguments CLI à remplacer les valeurs du YAML (par défaut: YAML > CLI)')
+    args = parser.parse_args()
+    VERBOSITY = args.verbosity
 
-if VERBOSITY != 'quiet':
-    print(f"Found {len(rows)} cases in {CSV}")
+    # If user passed a checkpoint, prefer it; else fall back to auto-detection and raise if none found
+    if args.checkpoint:
+        global CHECKPOINT
+        CHECKPOINT = Path(args.checkpoint).resolve()
+        if not CHECKPOINT.exists():
+            # do not raise: allow network-mounted paths; warn and continue
+            print(f"Warning: checkpoint file not found locally at {CHECKPOINT}; the inference command will still be attempted.")
+    if CHECKPOINT is None:
+        raise FileNotFoundError(f"No checkpoint found in expected locations: {candidates} (or via --checkpoint)")
 
-# Parallel processing
-max_workers = os.cpu_count() or 4
-with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-    future_to_row = {executor.submit(process_inference, row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, RESULTS_DIR, batch_size, device, save_predictions, save_probabilities, threshold): row for row in rows}
-    for future in tqdm(concurrent.futures.as_completed(future_to_row), total=len(rows), desc="Inference", unit="case"):
-        failed_case = future.result()
-        if failed_case:
-            failed.append(failed_case)
+    # Determine results dir (optionally namespaced by tag)
+    if args.tag:
+        results_dir = DEFAULT_RESULTS_DIR / args.tag
+    else:
+        results_dir = DEFAULT_RESULTS_DIR
 
-print('\nBatch inference completed')
-if failed:
-    print('Failed cases:', failed)
-else:
-    print('All cases processed successfully')
+    import yaml
+
+    # Charger la configuration pour récupérer les paramètres d'inférence
+    with open(CONFIG, 'r') as f:
+        config = yaml.safe_load(f) or {}
+
+    inference_params = config.get('inference_parameters', {})
+    batch_size = inference_params.get('batch_size', 1)
+    device = inference_params.get('device', 'cuda')
+    save_predictions = inference_params.get('save_predictions', True)
+    save_probabilities = inference_params.get('save_probabilities', False)
+    threshold = inference_params.get('threshold', 0.5)
+
+    if VERBOSITY != 'quiet':
+        print(f"Paramètres d'inférence: device={device}, batch_size={batch_size}, save_predictions={save_predictions}, save_probabilities={save_probabilities}, threshold={threshold}")
+
+    if not CSV.exists():
+        raise FileNotFoundError(f"Test CSV not found: {CSV}")
+    # Do not abort if checkpoint cannot be stat-checked (may be on mounted path); warn and continue
+    if not CHECKPOINT.exists():
+        print(f"Warning: checkpoint file not found locally at {CHECKPOINT}; the inference command will still be attempted.")
+    if not INFER_SCRIPT.exists():
+        raise FileNotFoundError(f"Inference script not found: {INFER_SCRIPT}")
+
+    failed = []
+    with open(CSV, 'r', newline='') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    if VERBOSITY != 'quiet':
+        print(f"Found {len(rows)} cases in {CSV}")
+
+    # Parallel processing
+    max_workers = os.cpu_count() or 4
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_row = {executor.submit(process_inference, row, VERBOSITY, ROOT, INFER_SCRIPT, CONFIG, CHECKPOINT, results_dir, batch_size, device, save_predictions, save_probabilities, threshold, args.force_cli): row for row in rows}
+        for future in tqdm(concurrent.futures.as_completed(future_to_row), total=len(rows), desc="Inference", unit="case"):
+            failed_case = future.result()
+            if failed_case:
+                failed.append(failed_case)
+
+    print('\nBatch inference completed')
+    if failed:
+        print('Failed cases:', failed)
+    else:
+        print('All cases processed successfully')
+
+
+if __name__ == '__main__':
+    main()

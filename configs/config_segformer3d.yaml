@@ -12,7 +12,7 @@ model:
   depths: [2, 2, 2, 2]            # Profondeur par couche
   decoder_head_embedding_dim: 256 # Dimension du décodeur
   decoder_dropout: 0.1            # Dropout du décodeur
-  input_size: [128, 128, 128]        # Dimensions d'entrée du modèle
+  input_size: [256, 256, 256]        # Dimensions d'entrée du modèle
 
 # Configuration de l'entraînement
 training_parameters:
@@ -39,33 +39,50 @@ warmup_scheduler:
 
 # Configuration de l'inférence par fenêtre glissante
 sliding_window_inference:
-  roi: [128, 128, 128]               # Région d'intérêt pour l'inférence
+  roi: [256, 256, 256]               # Région d'intérêt pour l'inférence
   sw_batch_size: 1                # Taille du batch pour l'inférence
+
+# Paramètres d'inférence (utilisés par `scripts/run_inference_all.py` et `inference_simple.py`)
+inference_parameters:
+  device: cpu                     # Device par défaut pour l'inférence (cpu|cuda)
+  batch_size: 1                   # Batch size pour l'inférence
+  save_predictions: true          # Sauvegarder les fichiers prediction_*.pt
+  save_probabilities: false       # Sauvegarder les probabilités (placeholder)  save_nifti: true                  # Sauvegarder également la prédiction en .nii.gz après resize vers la taille originale  threshold: 0.5                  # Seuil utilisé par certains workflows
+  verbosity: normal               # Verbosity par défaut pour l'inférence
+
+# Paramètres de visualisation (utilisés par `visualize_results.py`)
+visualization:
+  volume_vis: false               # Générer la visualisation volumétrique 3D
+  interactive: false              # Générer une visualisation interactive (HTML)
+  compute_errors: true            # Calculer et sauvegarder les erreurs
+  voxel_spacing: null             # Voxel spacing par défaut ("sx,sy,sz")
+  output_dir: visualizations      # Répertoire de sortie par défaut pour les visualisations
+  verbosity: normal               # Verbosity des visualisations
 
 # Configuration des données
 dataset_parameters:
   dataset_type: prostate_seg      # Type de dataset utilisé
   train_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128   # Chemin vers les données d'entraînement
-    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/train.csv  # Fichier de split d'entraînement
+    root: ./data/prostate_preprocessed/preprocessed_data_256_256_256   # Chemin vers les données d'entraînement
+    split_file: ./data/prostate_preprocessed/preprocessed_data_256_256_256/train.csv  # Fichier de split d'entraînement
     train: true                   # Mode entraînement
-    target_size: 128               # Taille cible des volumes
+    target_size: 256               # Taille cible des volumes
     # Activer les augmentations pour l'entraînement (sera surchargé par la pipeline si besoin)
     augmentations: true
     # Mode debug: imprime pour les 5 premiers samples si les augmentations modifient l'image/label
     debug_augment: false
   val_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128      # Chemin vers les données de validation
-    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/validation.csv    # Fichier de split de validation
+    root: ./data/prostate_preprocessed/preprocessed_data_256_256_256      # Chemin vers les données de validation
+    split_file: ./data/prostate_preprocessed/preprocessed_data_256_256_256/validation.csv    # Fichier de split de validation
     train: false                  # Mode validation
-    target_size: 128               # Taille cible des volumes
+    target_size: 256               # Taille cible des volumes
     # Par défaut on n'applique pas d'augmentations en validation
     augmentations: false
   test_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128      # Chemin vers les données de test
-    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/test.csv    # Fichier de split de test
+    root: ./data/prostate_preprocessed/preprocessed_data_256_256_256      # Chemin vers les données de test
+    split_file: ./data/prostate_preprocessed/preprocessed_data_256_256_256/test.csv    # Fichier de split de test
     train: false                  # Mode test
-    target_size: 128               # Taille cible des volumes
+    target_size: 256               # Taille cible des volumes
     augmentations: false
 
 # Configuration des dataloaders

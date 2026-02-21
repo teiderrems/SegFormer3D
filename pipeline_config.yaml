@@ -4,9 +4,9 @@
 # === PARAMÈTRES DE PRÉTRAITEMENT ===
 preprocessing:
   # Taille cible pour le resampling des volumes (en voxels)
-  # Valeurs recommandées: 64, 96, 128, 256
+  # Valeurs recommandées: 64, 96, 256, 256
   # Plus la taille est grande, plus la précision est élevée mais plus la mémoire GPU est nécessaire
-  target_size: 128
+  target_size: 256
 
   # Méthode de normalisation des intensités
   # 'minmax': Normalisation min-max [0,1]
@@ -70,7 +70,7 @@ paths:
   raw_data_dir: "./data/raw_prostate"
 
   # Répertoire pour les données prétraitées
-  preprocessed_data_dir: "./data/prostate_preprocessed/preprocessed_data_128_128_128"
+  preprocessed_data_dir: "./data/prostate_preprocessed/preprocessed_data_256_256_256"
 
   # Répertoire des configurations des modèles
   config_dir: "./configs"

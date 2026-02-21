@@ -17,12 +17,13 @@ def _inject_dummy_prostate_module(monkeypatch):
     dummy_mod = types.SimpleNamespace()
 
     class DummyProstateSegDataset:
-        def __init__(self, root_dir, is_train, transform, split_file, target_size):
+        def __init__(self, root_dir, is_train, transform, split_file, target_size, debug_augment=False):
             self.root_dir = root_dir
             self.is_train = is_train
             self.transform = transform
             self.split_file = split_file
             self.target_size = target_size
+            self.debug_augment = debug_augment
 
     dummy_mod.ProstateSegDataset = DummyProstateSegDataset
     monkeypatch.setitem(sys.modules, "dataloaders.prostate_seg", dummy_mod)

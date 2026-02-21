@@ -89,10 +89,10 @@ python pipeline.py \
     --results_dir ./results \
     --split_type fixed \
     --train_ratio 0.8 \
-    --val_ratio 0.2 \
-    --test_ratio 0.0 \
+    --val_ratio 0.1 \
+    --test_ratio 0.1 \
     --random_seed 42 \
-    --target_size 96
+    --target_size 256
 
 
 
@@ -103,14 +103,14 @@ python pipeline.py \
     --config ./pipeline_config_high_res.yaml \
     --raw_data_dir /path/to/raw_data \
     --architectures SegFormer3D \
-    --preprocessed_data_dir ./preprocessed_data_128_128_128 \
+    --preprocessed_data_dir ./preprocessed_data_256_256_256 \
     --config_dir ./configs \
     --checkpoint_dir ./checkpoints \
     --results_dir ./results \
     --split_type kfold \
     --k_folds 5 \
     --random_seed 42 \
-    --target_size 128
+    --target_size 256
 
 
 
@@ -127,6 +127,11 @@ python pipeline.py \
     --split_type fixed
 
 
+> Remarque : la pipeline détecte automatiquement la présence d'un fichier `test.csv`
+> dans `paths.preprocessed_data_dir` et sautera le prétraitement si ce fichier existe
+> (utile pour exécuter uniquement l'inférence/visualisation sur un jeu déjà prétraité).
+
+
 # Inférence et visualisations (sans prétraitement)
 
 python pipeline.py \
@@ -139,7 +144,7 @@ python pipeline.py \
 
 python pipeline.py \
     --finetune_checkpoint ./checkpoints/SegFormer3D/best_model.pth \
-    --target_size 128
+    --target_size 256
 
 # Reprendre un entraînement interrompu (à l'époque exacte d'interruption)
 # Restaure : modèle, optimiseur, scheduler, métriques, numéro d'époque
@@ -235,7 +240,7 @@ Tous les arguments CLI de `pipeline.py`. Chaque argument surcharge la valeur cor
 | Argument | Type | Défaut | Description |
 |----------|------|--------|-------------|
 | `--skip_preprocess` | flag | `false` | Sauter l'étape de prétraitement (si déjà fait) |
-| `--target_size` | `int` | config | Taille cible pour le resampling des volumes (ex: 96, 128, 256) |
+| `--target_size` | `int` | config | Taille cible pour le resampling des volumes (ex: 256, 256, 256) |
 | `--crop_to_prostate` | flag | `false` | Supprimer les slices axiales sans prostate avant le resampling |
 | `--crop_margin` | `int` | `2` | Nombre de slices de marge autour de la prostate lors du cropping |
 
@@ -257,6 +262,7 @@ Tous les arguments CLI de `pipeline.py`. Chaque argument surcharge la valeur cor
 | `--finetune_checkpoint` | `str` | `None` | Checkpoint pour le **fine-tuning** : charge les poids du modèle, remet l'optimiseur et le scheduler à zéro, repart de l'époque 0 |
 | `--resume_checkpoint` | `str` | `None` | Checkpoint pour la **reprise d'entraînement** : restaure modèle + optimiseur + scheduler + métriques + numéro d'époque |
 | `--disable_augmentations` | flag | `false` | Désactiver les augmentations de données pendant l'entraînement (surcharge `augmentations.enabled` dans la config) |
+| `--skip_training` | flag | `false` | Sauter l'étape d'entraînement — exécuter seulement l'inférence et les visualisations (utile pour évaluer/checkpoint-only runs) |
 
 > **Attention** : `--finetune_checkpoint` et `--resume_checkpoint` sont **mutuellement exclusifs**. Utilisez `--finetune_checkpoint` pour réentraîner un modèle depuis un autre jeu de données, et `--resume_checkpoint` pour continuer un entraînement interrompu.
 
@@ -300,6 +306,26 @@ Le script d'entraînement peut aussi être appelé directement (hors pipeline) :
 
 ---
 
+### Priorité YAML vs CLI et option `--force-cli`
+
+- Par défaut les valeurs explicites du fichier YAML **priment** sur les arguments CLI pour assurer une configuration reproductible et centralisée (comportement appliqué à la pipeline, à l'inférence et aux visualisations).
+- Si vous **voulez** forcer un override depuis la ligne de commande (par exemple en CI ou run ponctuel), utilisez l'option `--force-cli` *en conjonction* avec l'argument CLI concerné. Exemples :
+
+  ```bash
+  # YAML définit device=cuda, mais on force CLI -> device=cpu
+  python inference_simple.py --config configs/config_segformer3d.yaml --device cpu --force-cli
+
+  # YAML définit test dataset, mais on force CLI -> use the CLI dataset
+  python scripts/run_visualizations_all.py --test_data_dir /path/to/other --force-cli
+  ```
+
+- Nouveaux champs de configuration disponibles :
+  - `inference_parameters` : définit `device`, `batch_size`, `save_predictions`, `save_probabilities`, `save_nifti`, `threshold`, `verbosity`.
+  - `visualization` : définit `volume_vis`, `interactive`, `compute_errors`, `voxel_spacing`, `output_dir`, `verbosity`.
+
+Ces ajouts facilitent la configuration complète depuis les fichiers YAML tout en laissant la possibilité d'overrides ponctuels via la CLI lorsque nécessaire. Par défaut la pipeline sauvegarde maintenant les prédictions au format `prediction_*.pt` **et** `prediction_*.nii.gz` (si les métadonnées originales sont disponibles).
+
+
 ### Exécution directe de l'entraînement
 
 ```bash
@@ -335,6 +361,95 @@ nohup python pipeline.py --config pipeline_config.yaml > pipeline.log 2>&1 &
 # Suivre les logs en temps réel
 tail -f finetune.log
 ```
+
+---
+
+### Exécution sur un serveur / cluster (ex. calcululco) 🚀
+
+Cette section explique des **pratiques recommandées** pour lancer le pipeline sur un cluster de calcul (SLURM, nœuds GPU). Exemple : calcululco, clusters universitaires, ou serveurs partagés.
+
+Points clés :
+- Préparez un environnement Python (conda/venv) ou utilisez un container Singularity/Apptainer.
+- Sauvegardez les checkpoints & résultats sur un stockage **persistant** (ex : /scratch ou dossier réseau) — évitez les disques locaux éphémères.
+- Préférez l'exécution via SLURM (`sbatch`) plutôt que `nohup` pour la gestion des ressources.
+
+Exemple minimal — script SLURM (`run_segformer.sbatch`) :
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=segformer3d
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1               # nombre de GPU
+#SBATCH --cpus-per-task=8          # CPU par tâche
+#SBATCH --mem=64G                  # RAM
+#SBATCH --time=12:00:00            # HH:MM:SS
+#SBATCH --output=logs/%x.%j.out
+#SBATCH --error=logs/%x.%j.err
+
+module load cuda/11.8   # ou la version disponible sur le cluster
+# activer l'environnement Python (conda/venv)
+source /path/to/venv/bin/activate
+
+cd $SLURM_SUBMIT_DIR
+
+# Exemple : exécution complète (prétraitement + entraînement + inférence)
+python pipeline.py \
+  --config pipeline_config.yaml \
+  --raw_data_dir /data/raw_prostate \
+  --preprocessed_data_dir /scratch/preprocessed \
+  --checkpoint_dir /scratch/checkpoints \
+  --results_dir /scratch/results \
+  --architectures SegFormer3D \
+  --target_size 256
+```
+
+Exemples OAR (calcululco)
+- La syntaxe OAR peut varier selon l'infrastructure — adaptez les directives ci‑dessous à votre cluster.
+- Un script d'exemple est fourni dans `scripts/submit_oar_example.sh` (éditez les chemins avant utilisation).
+
+Exemple interactif (réservation) :
+
+```bash
+# Réservation interactive (adapter la syntaxe selon le cluster)
+oarsub -I -p "gpu>0" -l host=1/gpu=1,walltime=04:30:00
+```
+
+Exemple batch (soumettre le script d'exemple) :
+
+```bash
+# Soumettre le wrapper d'exemple fourni
+oarsub -S /bin/bash -p "gpu>0" -l host=1/gpu=1,walltime=04:30:00 ./scripts/submit_oar_example.sh --skip_training --checkpoints best_model --visualize
+```
+
+Conseils d'usage :
+- Pour **inférence + visualisation uniquement** (sans entraînement) :
+  python pipeline.py --config pipeline_config.yaml --skip_training --checkpoints best_model --visualize
+
+- Pour **forcer** un override CLI (si YAML est présent) : ajoutez `--force-cli` avec l'option CLI souhaitée.
+
+- Si vous utilisez un conteneur Singularity / Apptainer :
+
+```bash
+singularity exec --nv my-image.sif \
+  python pipeline.py --config pipeline_config.yaml --architectures SegFormer3D
+```
+
+Monitoring & logs
+- Sur SLURM : `squeue -u $USER`, `sacct -j <jobid>` et `tail -f logs/<job>.out`.
+- Vérifiez l'utilisation GPU : `nvidia-smi` (sur la node allouée).
+
+Bonnes pratiques
+- Allouez suffisamment de `--cpus-per-task` pour le dataloader (ex. 4–8) et `--mem` pour votre résolution d'entrée.
+- Placez vos jeux de données sur le stockage partagé/réseau et vos artefacts (checkpoints, résultats) sur /scratch ou équivalent.
+- Utilisez `--skip_training` pour exécuter uniquement l'inférence ou valider des checkpoints déjà générés.
+- Pour runs reproductibles, évitez d'overrider la config YAML sauf si nécessaire (`--force-cli`).
+
+Exemples avancés
+- Soumettre une série d'expériences (array job) : utilisez `#SBATCH --array=1-5` et un wrapper qui lit une table de configurations.
+- Pipeline en container + montage de volumes : `singularity exec --nv -B /data:/data my.sif python pipeline.py ...`
+
+---
+
 
 ### Utilisation du Makefile
 
@@ -385,7 +500,7 @@ Variables configurables du Makefile :
 | `PREP_OUTPUT` | `$(PWD)/data/prostate_preprocessed` | Répertoire de sortie prétraitement |
 | `CHECKPOINT_DIR` | `$(PWD)/checkpoints` | Répertoire des checkpoints |
 | `RESULTS_DIR` | `$(PWD)/results` | Répertoire des résultats |
-| `TARGET_SIZE` | `96` | Taille cible pour le resampling |
+| `TARGET_SIZE` | `256` | Taille cible pour le resampling |
 
 ---
 
@@ -420,7 +535,7 @@ La pipeline utilise un fichier de configuration YAML (`pipeline_config.yaml`) po
 
 preprocessing:
 
-  target_size: 96          # Taille des volumes (64, 96, 128, 256)
+  target_size: 256          # Taille des volumes (64, 256, 256, 256)
 
   normalize_method: "minmax"  # 'minmax' ou 'zscore'
 
@@ -500,7 +615,7 @@ python pipeline.py \
     --train_ratio 0.8 \
     --val_ratio 0.2 \
     --random_seed 42 \
-    --target_size 128 \
+    --target_size 256 \
     --architectures SegFormer3D
 
 ```
@@ -517,7 +632,7 @@ python pipeline.py \
 
 - Suppression optionnelle des slices sans prostate (`crop_to_prostate`)
 
-- Resampling à 96x96x96
+- Resampling à 256x256x256
 
 - Normalisation des intensités
 
@@ -717,7 +832,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001
 
@@ -733,7 +848,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
@@ -747,7 +862,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
@@ -811,7 +926,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 

@@ -21,15 +21,16 @@ from train_scripts.logger import get_logger, log_pipeline_step, log_section
 pipeline_logger = get_logger("pipeline", level="INFO")
 
 
-def load_pipeline_config(config_path):
+def load_pipeline_config(config_path, return_user_config=False):
     """
     Charge la configuration de la pipeline depuis un fichier YAML.
 
     Args:
         config_path: Chemin vers le fichier de configuration YAML
+        return_user_config: si True, retourne aussi le dictionnaire chargé depuis le YAML
 
     Returns:
-        Dictionnaire de configuration avec valeurs par défaut
+        Dictionnaire de configuration avec valeurs par défaut (et optionnellement le user_config)
     """
     # Configuration par défaut
     default_config = {
@@ -98,10 +99,11 @@ def load_pipeline_config(config_path):
     }
 
     # Charge la configuration depuis le fichier si elle existe
+    user_config = {}
     if config_path and Path(config_path).exists():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                user_config = yaml.safe_load(f)
+                user_config = yaml.safe_load(f) or {}
 
             # Fusionne avec la configuration par défaut
             def merge_configs(default, user):
@@ -116,16 +118,104 @@ def load_pipeline_config(config_path):
                 return result
 
             config = merge_configs(default_config, user_config)
+
+            # Normalisation: si l'utilisateur **n'a pas** défini explicitement
+            # `paths.test_data_dir` dans le YAML, on l'aligne sur
+            # `paths.preprocessed_data_dir` pour éviter des chemins divergents
+            # entre `preprocessed_data_dir` (souvent personnalisé) et la valeur
+            # par défaut statique de `test_data_dir`.
+            # Ne pas écraser si l'utilisateur a explicitement défini `test_data_dir`.
+            try:
+                user_paths = (user_config or {}).get('paths', {}) if isinstance(user_config, dict) else {}
+                cfg_paths = config.setdefault('paths', {})
+                if 'test_data_dir' not in user_paths:
+                    cfg_paths['test_data_dir'] = cfg_paths.get('preprocessed_data_dir', cfg_paths.get('test_data_dir'))
+            except Exception:
+                # En cas d'erreur inattendue, ne pas empêcher le chargement de la config
+                pipeline_logger.debug('Impossible de normaliser test_data_dir à partir de preprocessed_data_dir')
+
             pipeline_logger.info(f"Configuration chargée depuis: {config_path}")
-            return config
+            return (config, user_config) if return_user_config else config
 
         except Exception as e:
             pipeline_logger.error(f"Erreur lors du chargement de {config_path}: {e}")
             pipeline_logger.warning("Utilisation de la configuration par défaut")
-            return default_config
+            return (default_config, {}) if return_user_config else default_config
     else:
         pipeline_logger.warning("Fichier de configuration non trouvé, utilisation des paramètres par défaut")
-        return default_config
+        return (default_config, {}) if return_user_config else default_config
+
+
+def apply_cli_overrides_with_yaml_priority(config, user_cfg, args):
+    """
+    Applique les arguments CLI au dictionnaire `config` **seulement si** la clé
+    correspondante n'est pas explicitement définie dans `user_cfg` (YAML),
+    sauf si l'utilisateur a passé `--force-cli` : dans ce cas les options CLI
+    explicites prennent priorité.
+
+    - `config` est modifié in-place.
+    - `user_cfg` doit être le dict tel que lu depuis le YAML (vide si aucun YAML).
+    """
+    import sys
+
+    def user_cfg_has(user_cfg_dict, key_path):
+        cur = user_cfg_dict or {}
+        for k in key_path:
+            if not isinstance(cur, dict) or k not in cur:
+                return False
+            cur = cur[k]
+        return True
+
+    # Helper pour savoir si une option CLI a été explicitement fournie
+    def cli_provided(option_name):
+        for a in sys.argv[1:]:
+            if a == option_name or a.startswith(option_name + "="):
+                return True
+        return False
+
+    force = getattr(args, 'force_cli', False)
+
+    # Appliquer les arguments CLI **seulement si** la clé correspondante n'est pas définie dans le YAML
+    # ou si --force-cli a été activé ET l'option CLI a été explicitement fournie.
+    if getattr(args, 'disable_augmentations', False) and (force and cli_provided('--disable_augmentations') or not user_cfg_has(user_cfg, ['augmentations', 'enabled'])):
+        config['augmentations']['enabled'] = False
+
+    if getattr(args, 'architectures', None) and (force and cli_provided('--architectures') or not user_cfg_has(user_cfg, ['architectures', 'enabled'])):
+        config['architectures']['enabled'] = args.architectures
+    if getattr(args, 'raw_data_dir', None) and (force and cli_provided('--raw_data_dir') or not user_cfg_has(user_cfg, ['paths', 'raw_data_dir'])):
+        config['paths']['raw_data_dir'] = args.raw_data_dir
+    if getattr(args, 'preprocessed_data_dir', None) and (force and cli_provided('--preprocessed_data_dir') or not user_cfg_has(user_cfg, ['paths', 'preprocessed_data_dir'])):
+        config['paths']['preprocessed_data_dir'] = args.preprocessed_data_dir
+    if getattr(args, 'test_data_dir', None) and (force and cli_provided('--test_data_dir') or not user_cfg_has(user_cfg, ['paths', 'test_data_dir'])):
+        config['paths']['test_data_dir'] = args.test_data_dir
+    if getattr(args, 'config_dir', None) and (force and cli_provided('--config_dir') or not user_cfg_has(user_cfg, ['paths', 'config_dir'])):
+        config['paths']['config_dir'] = args.config_dir
+    if getattr(args, 'checkpoint_dir', None) and (force and cli_provided('--checkpoint_dir') or not user_cfg_has(user_cfg, ['paths', 'checkpoint_dir'])):
+        config['paths']['checkpoint_dir'] = args.checkpoint_dir
+    if getattr(args, 'results_dir', None) and (force and cli_provided('--results_dir') or not user_cfg_has(user_cfg, ['paths', 'results_dir'])):
+        config['paths']['results_dir'] = args.results_dir
+    if getattr(args, 'split_type', None) and (force and cli_provided('--split_type') or not user_cfg_has(user_cfg, ['splits', 'split_type'])):
+        config['splits']['split_type'] = args.split_type
+    if getattr(args, 'train_ratio', None) is not None and (force and cli_provided('--train_ratio') or not user_cfg_has(user_cfg, ['splits', 'train_ratio'])):
+        config['splits']['train_ratio'] = args.train_ratio
+    if getattr(args, 'val_ratio', None) is not None and (force and cli_provided('--val_ratio') or not user_cfg_has(user_cfg, ['splits', 'val_ratio'])):
+        config['splits']['val_ratio'] = args.val_ratio
+    if getattr(args, 'test_ratio', None) is not None and (force and cli_provided('--test_ratio') or not user_cfg_has(user_cfg, ['splits', 'test_ratio'])):
+        config['splits']['test_ratio'] = args.test_ratio
+    if getattr(args, 'k_folds', None) and (force and cli_provided('--k_folds') or not user_cfg_has(user_cfg, ['splits', 'k_folds'])):
+        config['splits']['k_folds'] = args.k_folds
+    if getattr(args, 'random_seed', None) and (force and cli_provided('--random_seed') or not user_cfg_has(user_cfg, ['splits', 'random_seed'])):
+        config['splits']['random_seed'] = args.random_seed
+    if getattr(args, 'target_size', None) and (force and cli_provided('--target_size') or not user_cfg_has(user_cfg, ['preprocessing', 'target_size'])):
+        config['preprocessing']['target_size'] = args.target_size
+    if getattr(args, 'skip_preprocess', False) and (force and cli_provided('--skip_preprocess') or not user_cfg_has(user_cfg, ['advanced', 'skip_preprocess'])):
+        config['advanced']['skip_preprocess'] = True
+    if getattr(args, 'crop_to_prostate', False) and (force and cli_provided('--crop_to_prostate') or not user_cfg_has(user_cfg, ['preprocessing', 'crop_to_prostate'])):
+        config['preprocessing']['crop_to_prostate'] = True
+    if getattr(args, 'crop_margin', None) is not None and (force and cli_provided('--crop_margin') or not user_cfg_has(user_cfg, ['preprocessing', 'crop_margin'])):
+        config['preprocessing']['crop_margin'] = args.crop_margin
+
+    return config
 
 def generate_csv_splits(preprocessed_dir, split_type="fixed", train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, k_folds=5, random_seed=42, architecture="SegFormer3D"):
     """
@@ -378,21 +468,64 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
     device = inference_params.get('device', 'cuda')
     save_predictions = inference_params.get('save_predictions', True)
     save_probabilities = inference_params.get('save_probabilities', False)
+    save_nifti = inference_params.get('save_nifti', True)
     threshold = inference_params.get('threshold', 0.5)
 
     # Créer le répertoire de sortie
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Traiter chaque patient dans le répertoire de test
+    # Traiter les patients de test — si un `test.csv` est présent, l'utiliser
     test_data_path = Path(test_data_dir)
     if not test_data_path.exists():
         pipeline_logger.error(f"Répertoire de test non trouvé: {test_data_path}")
         return False
 
-    patients = [p for p in test_data_path.iterdir() if p.is_dir()]
+    # Si test.csv existe, respecter la liste de cas indiquée (supporte colonnes `data_path` et/ou `case_name`)
+    csv_path = test_data_path / 'test.csv'
+    patients = []
+    if csv_path.exists():
+        import csv
+        try:
+            with open(csv_path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Priorité à data_path si fourni
+                    dp = row.get('data_path', '').strip() if row.get('data_path') is not None else ''
+                    case = row.get('case_name', '').strip() if row.get('case_name') is not None else ''
+
+                    candidate = None
+                    if dp:
+                        p = Path(dp)
+                        if not p.is_absolute():
+                            # essayer relatif au repo root, puis relatif à test_data_path
+                            repo_root = Path(__file__).resolve().parents[1]
+                            p_repo = (repo_root / dp).resolve()
+                            p_local = (test_data_path / dp).resolve()
+                            if p_repo.exists():
+                                candidate = p_repo
+                            elif p_local.exists():
+                                candidate = p_local
+                            else:
+                                candidate = p.resolve()
+                        else:
+                            candidate = p.resolve()
+                    elif case:
+                        candidate = (test_data_path / case).resolve()
+
+                    if candidate and candidate.exists() and candidate.is_dir():
+                        patients.append(candidate)
+                    else:
+                        pipeline_logger.warning(f"Patient listé dans test.csv introuvable ou non-dossier: {row}")
+        except Exception as e:
+            pipeline_logger.error(f"Impossible de lire {csv_path}: {e}")
+            return False
+    else:
+        # Ancien comportement: lister tous les dossiers présents dans le répertoire prétraité
+        patients = [p for p in test_data_path.iterdir() if p.is_dir()]
+
     if not patients:
-        pipeline_logger.error(f"Aucun patient trouvé dans {test_data_path}")
+        pipeline_logger.error(f"Aucun patient trouvé pour inférence dans {test_data_path}")
         return False
 
     success_count = 0
@@ -414,6 +547,8 @@ def run_inference(architecture, config_path, checkpoint_path, test_data_dir, out
             command += " --save_predictions"
         if save_probabilities:
             command += " --save_probabilities"
+        if save_nifti:
+            command += " --save_nifti"
         command += f" --threshold {threshold}"
         if run_command(command, cwd=str(Path(__file__).parent), description=f"Inférence pour {architecture} - {patient_dir.name}"):
             success_count += 1
@@ -443,6 +578,8 @@ def main():
                        help="Répertoire des résultats d'inférence (remplace la config)")
     parser.add_argument("--skip_preprocess", action="store_true",
                        help="Sauter l'étape de prétraitement")
+    parser.add_argument("--skip_training", action="store_true",
+                       help="Sauter l'étape d'entraînement (exécute seulement inférence + visualisations)")
     parser.add_argument("--split_type", choices=["fixed", "kfold"],
                        help="Type de split pour les données (remplace la config)")
     parser.add_argument("--train_ratio", type=float,
@@ -475,51 +612,19 @@ def main():
                        help='Supprimer les slices axiales sans prostate avant le resampling')
     parser.add_argument('--crop_margin', type=int,
                        help='Nombre de slices de marge autour de la prostate lors du cropping (défaut: 2, remplace la config)')
+    parser.add_argument('--force-cli', action='store_true', help='Forcer les arguments CLI à remplacer les valeurs du YAML (par défaut: YAML > CLI)')
 
     args = parser.parse_args()
 
-    # Charger la configuration
-    config = load_pipeline_config(args.config)
+    # Charger la configuration (renvoie aussi user_config pour prioriser YAML)
+    cfg_ret = load_pipeline_config(args.config, return_user_config=True)
+    if isinstance(cfg_ret, tuple):
+        config, user_cfg = cfg_ret
+    else:
+        config, user_cfg = cfg_ret, {}
 
-    # Appliquer l'option CLI d'augmentation (si fournie)
-    if args.disable_augmentations:
-        config['augmentations']['enabled'] = False
-
-    # Remplacer les paramètres de configuration par les arguments en ligne de commande
-    if args.architectures:
-        config['architectures']['enabled'] = args.architectures
-    if args.raw_data_dir:
-        config['paths']['raw_data_dir'] = args.raw_data_dir
-    if args.preprocessed_data_dir:
-        config['paths']['preprocessed_data_dir'] = args.preprocessed_data_dir
-    if args.test_data_dir:
-        config['paths']['test_data_dir'] = args.test_data_dir
-    if args.config_dir:
-        config['paths']['config_dir'] = args.config_dir
-    if args.checkpoint_dir:
-        config['paths']['checkpoint_dir'] = args.checkpoint_dir
-    if args.results_dir:
-        config['paths']['results_dir'] = args.results_dir
-    if args.split_type:
-        config['splits']['split_type'] = args.split_type
-    if args.train_ratio is not None:
-        config['splits']['train_ratio'] = args.train_ratio
-    if args.val_ratio is not None:
-        config['splits']['val_ratio'] = args.val_ratio
-    if args.test_ratio is not None:
-        config['splits']['test_ratio'] = args.test_ratio
-    if args.k_folds:
-        config['splits']['k_folds'] = args.k_folds
-    if args.random_seed:
-        config['splits']['random_seed'] = args.random_seed
-    if args.target_size:
-        config['preprocessing']['target_size'] = args.target_size
-    if args.skip_preprocess:
-        config['advanced']['skip_preprocess'] = True
-    if args.crop_to_prostate:
-        config['preprocessing']['crop_to_prostate'] = True
-    if args.crop_margin is not None:
-        config['preprocessing']['crop_margin'] = args.crop_margin
+    # Appliquer les arguments CLI en respectant la priorité YAML > CLI
+    apply_cli_overrides_with_yaml_priority(config, user_cfg, args)
 
     # Créer les répertoires nécessaires
     Path(config['paths']['preprocessed_data_dir']).mkdir(parents=True, exist_ok=True)
@@ -554,7 +659,24 @@ def main():
         log_section(pipeline_logger, f"ARCHITECTURE: {arch}")
 
         # 1. Prétraitement
-        if not config['advanced']['skip_preprocess']:
+        # --- Comportement ajouté : si un `test.csv` existe déjà dans le répertoire
+        # prétraité, on considère le prétraitement comme déjà fait et on le saute
+        # automatiquement. L'utilisateur peut toujours forcer le saut via
+        # `--skip_preprocess` ou la config YAML `advanced.skip_preprocess`.
+        preprocessed_dir = Path(config['paths']['preprocessed_data_dir'])
+        test_csv_path = preprocessed_dir / 'test.csv'
+
+        # Déterminer si l'on doit exécuter le prétraitement
+        if config.get('advanced', {}).get('skip_preprocess', False) or getattr(args, 'skip_preprocess', False):
+            pipeline_logger.info("--skip_preprocess demandé: saut du prétraitement")
+            do_preprocess = False
+        elif test_csv_path.exists():
+            pipeline_logger.info(f"Fichier de split détecté ({test_csv_path}) — saut automatique du prétraitement")
+            do_preprocess = False
+        else:
+            do_preprocess = True
+
+        if do_preprocess:
             if not preprocess_data(arch, config['paths']['raw_data_dir'], config['paths']['preprocessed_data_dir'],
                                  config['splits']['split_type'], config['splits']['train_ratio'],
                                  config['splits']['val_ratio'], config['splits']['test_ratio'],
@@ -577,90 +699,100 @@ def main():
             pipeline_logger.error(f"Configuration non trouvée: {config_path}")
             continue
 
-        # Load architecture config (and inject pipeline-level preferences)
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                arch_cfg = yaml.safe_load(f) or {}
-
-            # Assurer l'existence des champs attendus
-            arch_cfg.setdefault('dataset_parameters', {})
-            train_args = arch_cfg['dataset_parameters'].setdefault('train_dataset_args', {})
-            val_args = arch_cfg['dataset_parameters'].setdefault('val_dataset_args', {})
-            test_args = arch_cfg['dataset_parameters'].setdefault('test_dataset_args', {})
-
-            # Injecter le flag d'augmentations (train: par défaut selon pipeline, val/test: désactivées)
-            train_args['augmentations'] = bool(config.get('augmentations', {}).get('enabled', True))
-            val_args['augmentations'] = False
-            test_args['augmentations'] = False
-
-            # Injecter les chemins root et split_file depuis la config pipeline
-            preprocessed_dir = str(Path(config['paths']['preprocessed_data_dir']).resolve())
-            train_args.setdefault('root', preprocessed_dir)
-            train_args.setdefault('split_file', str(Path(preprocessed_dir) / 'train.csv'))
-            val_args.setdefault('root', preprocessed_dir)
-            val_args.setdefault('split_file', str(Path(preprocessed_dir) / 'validation.csv'))
-            test_data_dir = str(Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir'])).resolve())
-            test_args.setdefault('root', test_data_dir)
-            test_args.setdefault('split_file', str(Path(test_data_dir) / 'test.csv'))
-
-            # Injecter la taille cible (target_size) depuis la config pipeline
-            ts = config['preprocessing']['target_size']
-            train_args.setdefault('target_size', ts)
-            val_args.setdefault('target_size', ts)
-            test_args.setdefault('target_size', ts)
-
-            # Injecter dataset_type
-            pipeline_ds = config.get('dataset_parameters', {})
-            if 'dataset_type' in pipeline_ds:
-                arch_cfg['dataset_parameters'].setdefault('dataset_type', pipeline_ds['dataset_type'])
-
-            # Injecter debug_augment si défini dans pipeline config
-            for split_key, split_args in [('train_dataset_args', train_args), ('val_dataset_args', val_args), ('test_dataset_args', test_args)]:
-                pipeline_split = pipeline_ds.get(split_key, {})
-                if 'debug_augment' in pipeline_split:
-                    split_args.setdefault('debug_augment', pipeline_split['debug_augment'])
-
-            # Injecter les paramètres du dataloader depuis la config pipeline
-            pipeline_dl = config.get('dataloader', {})
-            if pipeline_dl:
-                arch_cfg.setdefault('dataloader', {})
-                for key in ['batch_size', 'shuffle', 'num_workers', 'drop_last']:
-                    if key in pipeline_dl:
-                        arch_cfg['dataloader'].setdefault(key, pipeline_dl[key])
-
-            # Injecter batch_size et d'autres paramètres training si définis dans pipeline
-            pipeline_training = config.get('training', {})
-            if pipeline_training:
-                arch_cfg.setdefault('training_parameters', {})
-                if 'batch_size' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('batch_size', pipeline_training['batch_size'])
-                    arch_cfg.setdefault('dataloader', {}).setdefault('batch_size', pipeline_training['batch_size'])
-                if 'num_epochs' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('num_epochs', pipeline_training['num_epochs'])
-                if 'learning_rate' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('learning_rate', pipeline_training['learning_rate'])
-                if 'device' in pipeline_training:
-                    arch_cfg['training_parameters'].setdefault('device', pipeline_training['device'])
-
-            # Écrire dans un fichier temporaire pour éviter d'écraser la config d'origine
-            import tempfile
-            tmp_cfg_file = Path(tempfile.gettempdir()) / f"config_{arch.lower()}_pipeline_tmp.yaml"
-            with open(tmp_cfg_file, 'w', encoding='utf-8') as f:
-                yaml.safe_dump(arch_cfg, f, default_flow_style=False, allow_unicode=True)
-
-            train_cfg_to_use = str(tmp_cfg_file)
-        except Exception as e:
-            pipeline_logger.error(f"Erreur injection augmentations: {e}")
+        # If user requested to skip training, bypass the training step and proceed to inference
+        if args.skip_training:
+            pipeline_logger.info(f"--skip_training activé: sauter l'entraînement pour {arch} et passer à l'inférence")
             train_cfg_to_use = str(config_path)
+        else:
+            # Load architecture config (and inject pipeline-level preferences)
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    arch_cfg = yaml.safe_load(f) or {}
 
-        if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint, args.resume_checkpoint):
-            pipeline_logger.error(f"Échec de l'entraînement pour {arch}")
-            continue
+                # Assurer l'existence des champs attendus
+                arch_cfg.setdefault('dataset_parameters', {})
+                train_args = arch_cfg['dataset_parameters'].setdefault('train_dataset_args', {})
+                val_args = arch_cfg['dataset_parameters'].setdefault('val_dataset_args', {})
+                test_args = arch_cfg['dataset_parameters'].setdefault('test_dataset_args', {})
+
+                # Injecter le flag d'augmentations (train: par défaut selon pipeline, val/test: désactivées)
+                train_args['augmentations'] = bool(config.get('augmentations', {}).get('enabled', True))
+                val_args['augmentations'] = False
+                test_args['augmentations'] = False
+
+                # Injecter les chemins root et split_file depuis la config pipeline
+                preprocessed_dir = str(Path(config['paths']['preprocessed_data_dir']).resolve())
+                train_args.setdefault('root', preprocessed_dir)
+                train_args.setdefault('split_file', str(Path(preprocessed_dir) / 'train.csv'))
+                val_args.setdefault('root', preprocessed_dir)
+                val_args.setdefault('split_file', str(Path(preprocessed_dir) / 'validation.csv'))
+                test_data_dir = str(Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir'])).resolve())
+                test_args.setdefault('root', test_data_dir)
+                test_args.setdefault('split_file', str(Path(test_data_dir) / 'test.csv'))
+
+                # Injecter la taille cible (target_size) depuis la config pipeline
+                ts = config['preprocessing']['target_size']
+                train_args.setdefault('target_size', ts)
+                val_args.setdefault('target_size', ts)
+                test_args.setdefault('target_size', ts)
+
+                # Injecter dataset_type
+                pipeline_ds = config.get('dataset_parameters', {})
+                if 'dataset_type' in pipeline_ds:
+                    arch_cfg['dataset_parameters'].setdefault('dataset_type', pipeline_ds['dataset_type'])
+
+                # Injecter debug_augment si défini dans pipeline config
+                for split_key, split_args in [('train_dataset_args', train_args), ('val_dataset_args', val_args), ('test_dataset_args', test_args)]:
+                    pipeline_split = pipeline_ds.get(split_key, {})
+                    if 'debug_augment' in pipeline_split:
+                        split_args.setdefault('debug_augment', pipeline_split['debug_augment'])
+
+                # Injecter les paramètres du dataloader depuis la config pipeline
+                pipeline_dl = config.get('dataloader', {})
+                if pipeline_dl:
+                    arch_cfg.setdefault('dataloader', {})
+                    for key in ['batch_size', 'shuffle', 'num_workers', 'drop_last']:
+                        if key in pipeline_dl:
+                            arch_cfg['dataloader'].setdefault(key, pipeline_dl[key])
+
+                # Injecter batch_size et d'autres paramètres training si définis dans pipeline
+                pipeline_training = config.get('training', {})
+                if pipeline_training:
+                    arch_cfg.setdefault('training_parameters', {})
+                    if 'batch_size' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('batch_size', pipeline_training['batch_size'])
+                        arch_cfg.setdefault('dataloader', {}).setdefault('batch_size', pipeline_training['batch_size'])
+                    if 'num_epochs' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('num_epochs', pipeline_training['num_epochs'])
+                    if 'learning_rate' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('learning_rate', pipeline_training['learning_rate'])
+                    if 'device' in pipeline_training:
+                        arch_cfg['training_parameters'].setdefault('device', pipeline_training['device'])
+
+                # Écrire dans un fichier temporaire pour éviter d'écraser la config d'origine
+                import tempfile
+                tmp_cfg_file = Path(tempfile.gettempdir()) / f"config_{arch.lower()}_pipeline_tmp.yaml"
+                with open(tmp_cfg_file, 'w', encoding='utf-8') as f:
+                    yaml.safe_dump(arch_cfg, f, default_flow_style=False, allow_unicode=True)
+
+                train_cfg_to_use = str(tmp_cfg_file)
+            except Exception as e:
+                pipeline_logger.error(f"Erreur injection augmentations: {e}")
+                train_cfg_to_use = str(config_path)
+
+            if not train_model(arch, train_cfg_to_use, args.finetune_checkpoint, args.resume_checkpoint):
+                pipeline_logger.error(f"Échec de l'entraînement pour {arch}")
+                continue
 
         # 3. Inférence
         # Chercher les checkpoints demandés et exécuter l'inférence pour chacun
         checkpoint_dir_arch = Path(config['paths']['checkpoint_dir']) / arch
         repo_ckpt_dir = Path(config['paths']['checkpoint_dir'])
+
+        # Répertoire des données de test (peut être différent des données prétraitées pour train/val)
+        # Toujours initialiser `test_data_dir` afin d'éviter UnboundLocalError lorsque
+        # des checkpoints sont fournis explicitement via CLI.
+        test_data_dir = Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir']))
 
         # Déterminer la liste de checkpoints à exécuter (argument CLI > défaut)
         if args.checkpoints:
@@ -669,30 +801,33 @@ def main():
             # Par défaut on essaie 'best_model' puis 'final_model'
             requested_ckpts = ['best_model', 'final_model']
 
-            # Répertoire des données de test (peut être différent des données prétraitées pour train/val)
-            test_data_dir = Path(config['paths'].get('test_data_dir', config['paths']['preprocessed_data_dir']))
         base_results_dir = Path(config['paths']['results_dir']) / arch
 
         any_success_for_arch = False
         for ckpt_name in requested_ckpts:
             # Rechercher des fichiers correspondant au nom du checkpoint (ex: best_model*) dans plusieurs emplacements
-            candidates = []
             pattern = f"{ckpt_name}*"
-            # Chercher d'abord dans le répertoire principal
-            candidates += list(repo_ckpt_dir.glob(pattern))
-            # Puis dans le sous-répertoire de l'architecture si existant
-            if checkpoint_dir_arch.exists():
-                candidates += list(checkpoint_dir_arch.glob(pattern))
 
-            # Fallback: prendre tout .pth/.pt si aucun n'a été trouvé pour ce nom
+            # Collecte brute (peut contenir des fichiers .txt d'information)
+            raw_candidates = list(repo_ckpt_dir.glob(pattern))
+            if checkpoint_dir_arch.exists():
+                raw_candidates += list(checkpoint_dir_arch.glob(pattern))
+
+            # Ne conserver que des fichiers de modèles reconnus (éviter .txt / .json)
+            allowed_exts = {'.pth', '.pt', '.ckpt', '.tar'}
+            candidates = [p for p in raw_candidates if p.suffix.lower() in allowed_exts]
+
+            # Si aucun fichier valide pour le pattern, fallback vers .pth/.pt présents dans les répertoires
             if not candidates:
-                candidates += list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
+                candidates = list(repo_ckpt_dir.glob("*.pth")) + list(repo_ckpt_dir.glob("*.pt"))
+                if checkpoint_dir_arch.exists():
+                    candidates += list(checkpoint_dir_arch.glob("*.pth")) + list(checkpoint_dir_arch.glob("*.pt"))
 
             if not candidates:
                 pipeline_logger.warning(f"Aucun checkpoint pour '{ckpt_name}'. Ignoré.")
                 continue
 
-            # Choisir le plus récent parmi les candidats
+            # Choisir le plus récent parmi les candidats valides
             checkpoint_path = max(candidates, key=lambda p: p.stat().st_mtime)
             pipeline_logger.info(f"Checkpoint '{ckpt_name}': {checkpoint_path}")
 

@@ -15,19 +15,19 @@ import concurrent.futures
 
 ROOT = Path(os.path.realpath(os.getcwd()))
 CONFIG = ROOT / 'configs' / 'config_segformer3d.yaml'
-# Auto-detect test CSV in any prostate_preprocessed_* folder (prefer '350' if available)
-csv_candidates = list((ROOT / 'data').glob('prostate_preprocessed_*' '/test.csv'))
+# Auto-detect test CSV in any prostate_preprocessed_* folder (prefer '128' if available)
+csv_candidates = list((ROOT / 'data'/'prostate_preprocessed').glob('preprocessed_data_*' '/test.csv'))
 if not csv_candidates:
     csv_candidates = list((ROOT / 'data').rglob('test.csv'))
 if csv_candidates:
     preferred = None
     for p in csv_candidates:
-        if '350' in str(p):
+        if '128' in str(p):
             preferred = p
             break
     TEST_CSV = preferred if preferred else max(csv_candidates, key=lambda p: p.stat().st_mtime)
 else:
-    TEST_CSV = ROOT / 'data' / 'prostate_preprocessed_350_350_350' / 'test.csv'
+    TEST_CSV = ROOT / 'data'/'prostate_preprocessed'/ 'preprocessed_data_128_128_128' / 'test.csv'
 
 RESULTS_DIR = ROOT / 'results'
 VIS_DIR = ROOT / 'visualizations'
@@ -66,41 +66,71 @@ def read_test_csv(csv_path):
 
 # Helper function to determine the test CSV path given CLI args and config
 def get_test_csv_from_args_and_config(args, config_path=CONFIG, default=TEST_CSV):
-    """Return a Path to the test.csv to use, following precedence:
-       --test_csv > --test_dir > --test_data_dir > config(test_dataset_args.root/split_file) > auto-detection
+    """Return a Path to the test.csv to use.
+
+    Behavior:
+      - If the user explicitly provided a config file via `--config`, YAML takes
+        precedence over CLI (YAML > CLI).
+      - If no explicit config was provided (using the script default), CLI
+        options keep precedence over the default YAML (CLI > default YAML).
+
+    This preserves backward-compatibility while giving explicit user configs
+    higher authority.
     """
-    # 1) explicit CSV path
+    # If user explicitly requested CLI to win, check CLI first
+    if getattr(args, 'force_cli', False):
+        if getattr(args, 'test_csv', None):
+            p = Path(args.test_csv)
+            return p if p.exists() else None
+        if getattr(args, 'test_dir', None):
+            p = Path(args.test_dir) / 'test.csv'
+            return p if p.exists() else None
+        if getattr(args, 'test_data_dir', None):
+            p = Path(args.test_data_dir) / 'test.csv'
+            return p if p.exists() else None
+
+    use_yaml_first = getattr(args, 'config', None) is not None or (config_path is not None and str(config_path) != str(CONFIG))
+
+    def try_config_csv():
+        try:
+            import yaml
+            cfg = yaml.safe_load(open(config_path, 'r', encoding='utf-8')) or {}
+            ds = cfg.get('dataset_parameters', {}).get('test_dataset_args', {})
+            if 'split_file' in ds and ds['split_file']:
+                p = Path(ds['split_file'])
+                if p.exists():
+                    return p
+            if 'root' in ds and ds['root']:
+                p = Path(ds['root']) / 'test.csv'
+                if p.exists():
+                    return p
+        except Exception:
+            pass
+        return None
+
+    # When explicit config provided, check YAML first
+    if use_yaml_first:
+        p = try_config_csv()
+        if p:
+            return p
+
+    # CLI precedence (or fallback when explicit config had no dataset info)
     if getattr(args, 'test_csv', None):
         p = Path(args.test_csv)
         return p if p.exists() else None
-
-    # 2) explicit directory containing test.csv
     if getattr(args, 'test_dir', None):
         p = Path(args.test_dir) / 'test.csv'
         return p if p.exists() else None
-
-    # 3) explicit dataset dir argument
     if getattr(args, 'test_data_dir', None):
         p = Path(args.test_data_dir) / 'test.csv'
         return p if p.exists() else None
 
-    # 4) try reading the config YAML for test_dataset_args
-    try:
-        import yaml
-        cfg = yaml.safe_load(open(config_path, 'r', encoding='utf-8')) or {}
-        ds = cfg.get('dataset_parameters', {}).get('test_dataset_args', {})
-        if 'split_file' in ds and ds['split_file']:
-            p = Path(ds['split_file'])
-            if p.exists():
-                return p
-        if 'root' in ds and ds['root']:
-            p = Path(ds['root']) / 'test.csv'
-            if p.exists():
-                return p
-    except Exception:
-        pass
+    # If not found yet, try YAML (covers the case of default CONFIG or explicit config lacking the keys)
+    p = try_config_csv()
+    if p:
+        return p
 
-    # 5) fallback automatic detection
+    # Last resort: auto-detection
     return default if default.exists() else None
 
 
@@ -139,9 +169,9 @@ def process_patient(patient, verbosity, skip_volume, timeout, PYTHON, ROOT, CONF
     outdir.mkdir(parents=True, exist_ok=True)
     if not input_dir.exists():
         # fallback: try previous hardcoded path to not break older setups
-        input_dir = ROOT / 'data' / 'prostate_preprocessed_350_350_350' / patient
+        input_dir = ROOT / 'data'/ 'prostate_preprocessed' / 'preprocessed_data_128_128_128' / patient
         if not input_dir.exists():
-            print(f"  Input data not found for {patient} (checked {test_csv.parent} and prostate_preprocessed_350_350_350). Skipping.")
+            print(f"  Input data not found for {patient} (checked {test_csv.parent} and prostate_preprocessed_128_128_128). Skipping.")
             return None
 
     cmd = [PYTHON, str(ROOT / 'visualize_results.py'),
@@ -200,6 +230,7 @@ def main():
     parser.add_argument('--config', type=str, default=None, help='Fichier de configuration YAML à utiliser pour détecter le dataset de test (remplace la valeur par défaut du script)')
     parser.add_argument('--results_subdir', type=str, default=None, help='Sous-dossier sous results contenant les prédictions (ex: best_model, final_model)')
     parser.add_argument('--vis_tag', type=str, default=None, help='Suffixe pour nommer le dossier de visualisations (ex: best_model, final_model)')
+    parser.add_argument('--force-cli', action='store_true', help='Forcer les arguments CLI à remplacer les valeurs du YAML (par défaut: YAML > CLI)')
     args = parser.parse_args()
     verbosity = args.verbosity
     timeout = args.timeout
