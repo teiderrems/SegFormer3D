@@ -128,13 +128,13 @@ pip install -r requirements.txt
 
 python pipeline.py
 
-# Configuration haute résolution (128x128x128)
+# Configuration haute résolution (256x256x256)
 
 python pipeline.py --config pipeline_config_high_res.yaml
 
 # Personnalisation via ligne de commande
 
-python pipeline.py --target_size 128 --architectures SegFormer3D --split_type kfold
+python pipeline.py --target_size 256 --architectures SegFormer3D --split_type kfold
 
 # Configuration avancée avec arguments
 
@@ -144,13 +144,15 @@ python pipeline.py \
 
     --architectures SegFormer3D \
 
-    --target_size 96 \
+    --target_size 256 \
 
     --split_type fixed \
 
     --train_ratio 0.8 \
 
-    --val_ratio 0.2
+    --val_ratio 0.1 \
+
+    --test_ratio 0.1
 
 ```
 
@@ -257,7 +259,7 @@ Pour des exemples d'exécution sur cluster (SLURM / OAR) et un script d'exemple,
 | Argument | Type | Défaut | Description |
 |----------|------|--------|-------------|
 | `--skip_preprocess` | flag | `false` | Sauter le prétraitement |
-| `--target_size` | `int` | config | Taille des volumes (96, 128, 256) |
+| `--target_size` | `int` | config | Taille des volumes (256, 256, 256) |
 | `--crop_to_prostate` | flag | `false` | Supprimer les slices sans prostate |
 | `--crop_margin` | `int` | `2` | Marge de slices autour de la prostate |
 
@@ -299,7 +301,7 @@ Pour des exemples d'exécution sur cluster (SLURM / OAR) et un script d'exemple,
 
 cd data/prostate_raw_data
 
-python prostate_preprocess.py --input_dir ./ --output_dir ../prostate_preprocessed --target_size 128
+python prostate_preprocess.py --input_dir ../ --output_dir ../prostate_preprocessed --target_size 256
 
 
 
@@ -421,7 +423,7 @@ Le fichier `pipeline_config.yaml` définit tous les paramètres configurables :
 
 preprocessing:
 
-  target_size: 96          # Taille des volumes (64, 96, 128, 256)
+  target_size: 256          # Taille des volumes (64, 256, 256, 256)
 
   normalize_method: "minmax"
 
@@ -471,9 +473,9 @@ Vous pouvez spécifier un répertoire dédié pour les données de test via `pat
 
 
 
-- `pipeline_config.yaml` : Configuration standard (96×96×96)
+- `pipeline_config.yaml` : Configuration standard (256×256×256)
 
-- `pipeline_config_high_res.yaml` : Haute résolution (128×128×128) avec cross-validation
+- `pipeline_config_high_res.yaml` : Haute résolution (256×256×256) avec cross-validation
 
 
 
@@ -485,7 +487,7 @@ Vous pouvez spécifier un répertoire dédié pour les données de test via `pat
 
 # Modifier la taille des volumes
 
-python pipeline.py --target_size 128
+python pipeline.py --target_size 256
 
 
 
@@ -565,7 +567,7 @@ data/raw_prostate/
 
 ### Format de sortie
 
-- **Prétraitées** : Tensors PyTorch (.pt) 96×96×96
+- **Prétraitées** : Tensors PyTorch (.pt) 256×256×256
 
 - **Splits** : CSV stratifiés avec équilibrage des classes
 
@@ -689,7 +691,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001
 
@@ -701,7 +703,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
@@ -715,7 +717,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
@@ -817,7 +819,7 @@ visualizations/
 
   - Paramètres remplaçables via ligne de commande
 
-  - Taille des volumes configurable (64, 96, 128, 256 voxels)
+  - Taille des volumes configurable (64, 256, 256, 256 voxels)
 
 
 

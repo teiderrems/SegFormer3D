@@ -12,7 +12,7 @@ model:
   depths: [2, 2, 2, 2]
   decoder_head_embedding_dim: 256
   decoder_dropout: 0.1
-  input_size: [128, 128, 128]
+  input_size: [256, 256, 256]
 
 training_parameters:
   batch_size: 1
@@ -35,30 +35,30 @@ warmup_scheduler:
   warmup_epochs: 10
 
 sliding_window_inference:
-  roi: [128, 128, 128]
+  roi: [256, 256, 256]
   sw_batch_size: 1
 
 # Dataset parameters with debug augment enabled
 dataset_parameters:
   dataset_type: prostate_seg
   train_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128
-    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/train.csv
+    root: ./data/prostate_preprocessed/preprocessed_data_256_256_256
+    split_file: ./data/prostate_preprocessed/preprocessed_data_256_256_256/train.csv
     train: true
-    target_size: 128
+    target_size: 256
     augmentations: true
     debug_augment: true
   val_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128
-    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/validation.csv
+    root: ./data/prostate_preprocessed/preprocessed_data_256_256_256
+    split_file: ./data/prostate_preprocessed/preprocessed_data_256_256_256/validation.csv
     train: false
-    target_size: 128
+    target_size: 256
     augmentations: false
   test_dataset_args:
-    root: ./data/prostate_preprocessed/preprocessed_data_128_128_128
-    split_file: ./data/prostate_preprocessed/preprocessed_data_128_128_128/test.csv
+    root: ./data/prostate_preprocessed/preprocessed_data_256_256_256
+    split_file: ./data/prostate_preprocessed/preprocessed_data_256_256_256/test.csv
     train: false
-    target_size: 128
+    target_size: 256
     augmentations: false
 
 dataloader:

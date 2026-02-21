@@ -89,10 +89,10 @@ python pipeline.py \
     --results_dir ./results \
     --split_type fixed \
     --train_ratio 0.8 \
-    --val_ratio 0.2 \
-    --test_ratio 0.0 \
+    --val_ratio 0.1 \
+    --test_ratio 0.1 \
     --random_seed 42 \
-    --target_size 96
+    --target_size 256
 
 
 
@@ -103,14 +103,14 @@ python pipeline.py \
     --config ./pipeline_config_high_res.yaml \
     --raw_data_dir /path/to/raw_data \
     --architectures SegFormer3D \
-    --preprocessed_data_dir ./preprocessed_data_128_128_128 \
+    --preprocessed_data_dir ./preprocessed_data_256_256_256 \
     --config_dir ./configs \
     --checkpoint_dir ./checkpoints \
     --results_dir ./results \
     --split_type kfold \
     --k_folds 5 \
     --random_seed 42 \
-    --target_size 128
+    --target_size 256
 
 
 
@@ -144,7 +144,7 @@ python pipeline.py \
 
 python pipeline.py \
     --finetune_checkpoint ./checkpoints/SegFormer3D/best_model.pth \
-    --target_size 128
+    --target_size 256
 
 # Reprendre un entraînement interrompu (à l'époque exacte d'interruption)
 # Restaure : modèle, optimiseur, scheduler, métriques, numéro d'époque
@@ -240,7 +240,7 @@ Tous les arguments CLI de `pipeline.py`. Chaque argument surcharge la valeur cor
 | Argument | Type | Défaut | Description |
 |----------|------|--------|-------------|
 | `--skip_preprocess` | flag | `false` | Sauter l'étape de prétraitement (si déjà fait) |
-| `--target_size` | `int` | config | Taille cible pour le resampling des volumes (ex: 96, 128, 256) |
+| `--target_size` | `int` | config | Taille cible pour le resampling des volumes (ex: 256, 256, 256) |
 | `--crop_to_prostate` | flag | `false` | Supprimer les slices axiales sans prostate avant le resampling |
 | `--crop_margin` | `int` | `2` | Nombre de slices de marge autour de la prostate lors du cropping |
 
@@ -400,7 +400,7 @@ python pipeline.py \
   --checkpoint_dir /scratch/checkpoints \
   --results_dir /scratch/results \
   --architectures SegFormer3D \
-  --target_size 128
+  --target_size 256
 ```
 
 Exemples OAR (calcululco)
@@ -500,7 +500,7 @@ Variables configurables du Makefile :
 | `PREP_OUTPUT` | `$(PWD)/data/prostate_preprocessed` | Répertoire de sortie prétraitement |
 | `CHECKPOINT_DIR` | `$(PWD)/checkpoints` | Répertoire des checkpoints |
 | `RESULTS_DIR` | `$(PWD)/results` | Répertoire des résultats |
-| `TARGET_SIZE` | `96` | Taille cible pour le resampling |
+| `TARGET_SIZE` | `256` | Taille cible pour le resampling |
 
 ---
 
@@ -535,7 +535,7 @@ La pipeline utilise un fichier de configuration YAML (`pipeline_config.yaml`) po
 
 preprocessing:
 
-  target_size: 96          # Taille des volumes (64, 96, 128, 256)
+  target_size: 256          # Taille des volumes (64, 256, 256, 256)
 
   normalize_method: "minmax"  # 'minmax' ou 'zscore'
 
@@ -615,7 +615,7 @@ python pipeline.py \
     --train_ratio 0.8 \
     --val_ratio 0.2 \
     --random_seed 42 \
-    --target_size 128 \
+    --target_size 256 \
     --architectures SegFormer3D
 
 ```
@@ -632,7 +632,7 @@ python pipeline.py \
 
 - Suppression optionnelle des slices sans prostate (`crop_to_prostate`)
 
-- Resampling à 96x96x96
+- Resampling à 256x256x256
 
 - Normalisation des intensités
 
@@ -832,7 +832,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001
 
@@ -848,7 +848,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
@@ -862,7 +862,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
@@ -926,7 +926,7 @@ python visualize_results.py --config configs/config_segformer3d.yaml \
 
     --prediction results/SegFormer3D/patient_001/prediction_patient_001.pt \
 
-    --input_dir data/preprocessed_data_128_128_128/patient_001 \
+    --input_dir data/preprocessed_data_256_256_256/patient_001 \
 
     --output_dir visualizations/SegFormer3D/patient_001 \
 
